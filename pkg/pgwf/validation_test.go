@@ -95,6 +95,59 @@ func TestLeaseRescheduleValidation(t *testing.T) {
 	}
 }
 
+func TestCompleteUnheldValidation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cases := []struct {
+		name   string
+		ctx    context.Context
+		db     DB
+		jobID  JobID
+		worker WorkerID
+	}{
+		{name: "nil db", ctx: ctx, db: nil, jobID: "job", worker: "worker"},
+		{name: "nil ctx", ctx: nil, db: stubDB{}, jobID: "job", worker: "worker"},
+		{name: "empty job", ctx: ctx, db: stubDB{}, jobID: "", worker: "worker"},
+		{name: "empty worker", ctx: ctx, db: stubDB{}, jobID: "job", worker: ""},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if err := CompleteUnheldJob(tc.ctx, tc.db, tc.jobID, tc.worker); err == nil {
+				t.Fatalf("expected error for %s", tc.name)
+			}
+		})
+	}
+}
+
+func TestRescheduleUnheldValidation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	deps := JobDependencies{NextNeed: Capability("cap")}
+	cases := []struct {
+		name   string
+		ctx    context.Context
+		db     DB
+		jobID  JobID
+		worker WorkerID
+		deps   JobDependencies
+	}{
+		{name: "nil db", ctx: ctx, db: nil, jobID: "job", worker: "worker", deps: deps},
+		{name: "nil ctx", ctx: nil, db: stubDB{}, jobID: "job", worker: "worker", deps: deps},
+		{name: "empty job", ctx: ctx, db: stubDB{}, jobID: "", worker: "worker", deps: deps},
+		{name: "empty worker", ctx: ctx, db: stubDB{}, jobID: "job", worker: "", deps: deps},
+		{name: "missing deps", ctx: ctx, db: stubDB{}, jobID: "job", worker: "worker", deps: JobDependencies{}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if err := RescheduleUnheldJob(tc.ctx, tc.db, tc.jobID, tc.worker, tc.deps); err == nil {
+				t.Fatalf("expected error for %s", tc.name)
+			}
+		})
+	}
+}
+
 func TestLeaseValidateActiveFailures(t *testing.T) {
 	t.Parallel()
 	if err := (*Lease)(nil).validateActive(); err == nil {

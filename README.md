@@ -42,6 +42,16 @@ func (l *pgwf.Lease) Complete(ctx context.Context, db pgwf.DB) error
 - `WithKeepAlive` spins up an internal goroutine (using a real `*sql.DB`) that refreshes the lease until you complete or reschedule it.
 - Error helpers wrap driver errors in sentinel `pgwf.ErrLeaseMismatch`, `pgwf.ErrJobNotFound`, or `pgwf.ErrDependencyViolation` values for easier inspection.
 
+### Unheld job helpers
+
+```go
+func pgwf.CompleteUnheldJob(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, worker pgwf.WorkerID) error
+func pgwf.RescheduleUnheldJob(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, worker pgwf.WorkerID, deps pgwf.JobDependencies) error
+```
+
+- Mirror the lease-based APIs but operate directly on ready jobs by ID (no lease required).
+- Require the caller to declare the acting worker for trace/log context and reuse the same dependency validation rules as `Lease.Reschedule`.
+
 ### Installer module
 
 ```go
