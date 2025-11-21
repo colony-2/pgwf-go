@@ -61,6 +61,13 @@ func (d JobDependencies) availableAtArg() any {
 	return d.AvailableAt
 }
 
+func (d JobDependencies) singletonArg() any {
+	if d.SingletonKey == "" {
+		return nil
+	}
+	return d.SingletonKey
+}
+
 const (
 	defaultLeaseSeconds   = 60
 	maxBackoffInterval    = time.Minute

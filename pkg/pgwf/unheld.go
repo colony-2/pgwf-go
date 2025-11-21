@@ -65,7 +65,7 @@ func RescheduleUnheldJob(ctx context.Context, db DB, jobID JobID, worker WorkerI
 		string(worker),
 		string(deps.NextNeed),
 		pq.Array(deps.waitForStrings()),
-		deps.SingletonKey,
+		deps.singletonArg(),
 		deps.availableAtArg(),
 	)
 

@@ -36,7 +36,7 @@ func SubmitJob(ctx context.Context, db DB, jobID JobID, deps JobDependencies, wo
 		string(worker),
 		string(deps.NextNeed),
 		pq.Array(deps.waitForStrings()),
-		deps.SingletonKey,
+		deps.singletonArg(),
 		deps.availableAtArg(),
 	)
 

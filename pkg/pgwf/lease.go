@@ -90,7 +90,7 @@ func (l *Lease) Reschedule(ctx context.Context, db DB, deps JobDependencies) err
 		string(l.worker),
 		string(deps.NextNeed),
 		pq.Array(deps.waitForStrings()),
-		deps.SingletonKey,
+		deps.singletonArg(),
 		deps.availableAtArg(),
 	)
 
