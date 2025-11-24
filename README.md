@@ -52,6 +52,16 @@ func pgwf.RescheduleUnheldJob(ctx context.Context, db pgwf.DB, jobID pgwf.JobID,
 - Mirror the lease-based APIs but operate directly on ready jobs by ID (no lease required).
 - Require the caller to declare the acting worker for trace/log context and reuse the same dependency validation rules as `Lease.Reschedule`.
 
+### Cancellation
+
+```go
+func pgwf.CancelJob(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, worker pgwf.WorkerID, reason string) error
+```
+
+- Marks queued or active jobs for cancellation via `pgwf.cancel_job`.
+- `reason` is optional (pass `""` to record `NULL`) and is recorded in the trace event emitted by pgwf.
+- Surfaces the same sentinel errors (`ErrJobNotFound`, `ErrLeaseMismatch`, etc.) as other helpers.
+
 ### Installer module
 
 ```go
