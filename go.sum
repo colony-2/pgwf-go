@@ -1,5 +1,4 @@
-github.com/colony-2/pgwf v0.0.0-20251124201320-6c05efff667f h1:y8NOc7C+S2A5kBTyv6g8lvby0KIctuKQ7mnY1qj4PRo=
-github.com/colony-2/pgwf v0.0.0-20251124201320-6c05efff667f/go.mod h1:QJKHOf9Ybwm9V+74tls15xhPVbcDLBwkZ2dcVNAkLuw=
+github.com/colony-2/pgwf v0.0.0-20251125194837-642b26da9860 h1:05jsQS4fktvtalHmaGwK09zClqI/bKUuNWarK7CkkEo=
 github.com/colony-2/pgwf v0.0.0-20251125194837-642b26da9860/go.mod h1:QJKHOf9Ybwm9V+74tls15xhPVbcDLBwkZ2dcVNAkLuw=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
