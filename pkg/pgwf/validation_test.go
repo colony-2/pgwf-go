@@ -35,11 +35,17 @@ func TestSubmitJobValidationErrors(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			if err := SubmitJob(tc.ctx, tc.db, tc.jobID, tc.deps, tc.worker); err == nil {
+			if err := SubmitJob(tc.ctx, tc.db, tc.jobID, tc.deps, nil, tc.worker, "", time.Time{}); err == nil {
 				t.Fatalf("expected error for %s", tc.name)
 			}
 		})
 	}
+
+	t.Run("payload not object", func(t *testing.T) {
+		if err := SubmitJob(ctx, stubDB{}, "job", deps, []string{"not an object"}, "w", "", time.Time{}); err == nil {
+			t.Fatalf("expected payload validation error")
+		}
+	})
 }
 
 func TestGetWorkValidationErrors(t *testing.T) {
@@ -90,8 +96,11 @@ func TestLeaseRescheduleValidation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	lease := &Lease{jobID: "job", leaseID: "lease", worker: "worker", leaseExpires: time.Now().Add(time.Minute)}
-	if err := lease.Reschedule(ctx, stubDB{}, JobDependencies{}); err == nil {
+	if err := lease.Reschedule(ctx, stubDB{}, JobDependencies{}, nil); err == nil {
 		t.Fatalf("expected validation error")
+	}
+	if err := lease.Reschedule(ctx, stubDB{}, JobDependencies{NextNeed: "cap"}, []string{"not an object"}); err == nil {
+		t.Fatalf("expected payload validation error")
 	}
 }
 
@@ -141,11 +150,17 @@ func TestRescheduleUnheldValidation(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			if err := RescheduleUnheldJob(tc.ctx, tc.db, tc.jobID, tc.worker, tc.deps); err == nil {
+			if err := RescheduleUnheldJob(tc.ctx, tc.db, tc.jobID, tc.worker, tc.deps, nil); err == nil {
 				t.Fatalf("expected error for %s", tc.name)
 			}
 		})
 	}
+
+	t.Run("invalid payload", func(t *testing.T) {
+		if err := RescheduleUnheldJob(ctx, stubDB{}, "job", "worker", deps, []string{"not an object"}); err == nil {
+			t.Fatalf("expected payload validation error")
+		}
+	})
 }
 
 func TestCancelJobValidation(t *testing.T) {
@@ -192,6 +207,9 @@ func TestLeaseAccessorsNil(t *testing.T) {
 	}
 	if !lease.LeaseExpiry().IsZero() {
 		t.Fatalf("expected zero time for nil lease")
+	}
+	if lease.NextNeed() != "" {
+		t.Fatalf("expected empty capability for nil lease")
 	}
 }
 

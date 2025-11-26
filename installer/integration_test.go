@@ -3,6 +3,7 @@ package installer_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -20,7 +21,7 @@ import (
 func TestSubmitGetComplete(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("ingest")}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-1"), deps, pgwf.WorkerID("producer")); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-1"), deps, nil, pgwf.WorkerID("producer"), "", time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -41,10 +42,57 @@ func TestSubmitGetComplete(t *testing.T) {
 	})
 }
 
+func TestSubmitWithExpiry(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		deps := pgwf.JobDependencies{
+			NextNeed: pgwf.Capability("expiring"),
+		}
+		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-expired"), deps, nil, pgwf.WorkerID("producer"), "", time.Now().Add(-time.Hour)); err != nil {
+			t.Fatalf("submit with expiry: %v", err)
+		}
+
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-expire"), []pgwf.Capability{"expiring"})
+		if err != nil {
+			t.Fatalf("get work for expired job: %v", err)
+		}
+		if lease != nil {
+			t.Fatalf("expected expired job to be unleaseable")
+		}
+	})
+}
+
+func TestSubmitWithPayload(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("payload")}
+		payload := map[string]any{"hello": "world", "n": 3}
+		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-with-payload"), deps, payload, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit with payload: %v", err)
+		}
+
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("payload-worker"), []pgwf.Capability{"payload"})
+		if err != nil {
+			t.Fatalf("get work: %v", err)
+		}
+		if lease == nil {
+			t.Fatalf("expected lease with payload")
+		}
+		var got map[string]any
+		if err := json.Unmarshal(lease.Payload(), &got); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		if got["hello"] != "world" || got["n"] != float64(3) {
+			t.Fatalf("payload mismatch: %v", got)
+		}
+		if err := lease.Complete(ctx, db); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+	})
+}
+
 func TestRescheduleFlow(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("step1")}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-resched"), deps, pgwf.WorkerID("submitter")); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-resched"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -57,7 +105,8 @@ func TestRescheduleFlow(t *testing.T) {
 		}
 
 		newDeps := pgwf.JobDependencies{NextNeed: pgwf.Capability("step2"), AvailableAt: time.Now()}
-		if err := lease.Reschedule(ctx, db, newDeps); err != nil {
+		newPayload := map[string]any{"stage": "step2", "attempts": 1}
+		if err := lease.Reschedule(ctx, db, newDeps, newPayload); err != nil {
 			t.Fatalf("reschedule: %v", err)
 		}
 
@@ -67,6 +116,13 @@ func TestRescheduleFlow(t *testing.T) {
 		}
 		if lease2 == nil {
 			t.Fatalf("expected rescheduled lease")
+		}
+		var got map[string]any
+		if err := json.Unmarshal(lease2.Payload(), &got); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		if got["stage"] != "step2" || got["attempts"] != float64(1) {
+			t.Fatalf("unexpected payload after reschedule: %v", got)
 		}
 
 		if err := lease2.Complete(ctx, db); err != nil {
@@ -78,7 +134,7 @@ func TestRescheduleFlow(t *testing.T) {
 func TestLeaseExtend(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("extend")}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-extend"), deps, pgwf.WorkerID("submitter")); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-extend"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -107,7 +163,7 @@ func TestLeaseExtend(t *testing.T) {
 func TestCompleteUnheldJob(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("adhoc")}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("adhoc-job"), deps, pgwf.WorkerID("submitter")); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("adhoc-job"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -128,7 +184,7 @@ func TestCompleteUnheldJob(t *testing.T) {
 func TestRescheduleUnheldJob(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("initial")}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("unheld-resched"), deps, pgwf.WorkerID("submitter")); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("unheld-resched"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -136,7 +192,8 @@ func TestRescheduleUnheldJob(t *testing.T) {
 			NextNeed:    pgwf.Capability("rescheduled"),
 			AvailableAt: time.Now(),
 		}
-		if err := pgwf.RescheduleUnheldJob(ctx, db, pgwf.JobID("unheld-resched"), pgwf.WorkerID("scheduler"), newDeps); err != nil {
+		payload := map[string]any{"phase": "rescheduled"}
+		if err := pgwf.RescheduleUnheldJob(ctx, db, pgwf.JobID("unheld-resched"), pgwf.WorkerID("scheduler"), newDeps, payload); err != nil {
 			t.Fatalf("reschedule unheld: %v", err)
 		}
 
@@ -157,6 +214,13 @@ func TestRescheduleUnheldJob(t *testing.T) {
 		}
 		if lease.JobID() != pgwf.JobID("unheld-resched") {
 			t.Fatalf("unexpected job id %s", lease.JobID())
+		}
+		var got map[string]any
+		if err := json.Unmarshal(lease.Payload(), &got); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		if got["phase"] != "rescheduled" {
+			t.Fatalf("unexpected payload after unheld reschedule: %v", got)
 		}
 		if err := lease.Complete(ctx, db); err != nil {
 			t.Fatalf("complete rescheduled lease: %v", err)
@@ -185,7 +249,7 @@ func TestAwaitWork(t *testing.T) {
 
 		time.Sleep(500 * time.Millisecond)
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("await")}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("await-job"), deps, pgwf.WorkerID("submitter")); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("await-job"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 

@@ -3,6 +3,7 @@ package pgwf
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
@@ -27,10 +28,9 @@ type DB interface {
 
 // JobDependencies define when/how a job becomes runnable.
 type JobDependencies struct {
-	NextNeed     Capability
-	WaitFor      []JobID
-	SingletonKey string
-	AvailableAt  time.Time
+	NextNeed    Capability
+	WaitFor     []JobID
+	AvailableAt time.Time
 }
 
 func (d JobDependencies) validate() error {
@@ -55,17 +55,14 @@ func (d JobDependencies) waitForStrings() []string {
 }
 
 func (d JobDependencies) availableAtArg() any {
-	if d.AvailableAt.IsZero() {
-		return nil
-	}
-	return d.AvailableAt
+	return optionalTime(d.AvailableAt)
 }
 
-func (d JobDependencies) singletonArg() any {
-	if d.SingletonKey == "" {
+func optionalTime(t time.Time) any {
+	if t.IsZero() {
 		return nil
 	}
-	return d.SingletonKey
+	return t
 }
 
 const (
@@ -82,7 +79,7 @@ var (
 	ErrLeaseMismatch = errors.New("pgwf: lease mismatch")
 	// ErrJobNotFound indicates the job is missing from the database.
 	ErrJobNotFound = errors.New("pgwf: job not found")
-	// ErrDependencyViolation denotes wait_for/singleton conflicts during submission/reschedule.
+	// ErrDependencyViolation denotes dependency conflicts surfaced during submission.
 	ErrDependencyViolation = errors.New("pgwf: dependency violation")
 )
 
@@ -92,6 +89,7 @@ type Lease struct {
 	leaseID      string
 	worker       WorkerID
 	capability   Capability
+	payload      json.RawMessage
 	leaseExpires time.Time
 
 	mu               sync.RWMutex
@@ -120,6 +118,19 @@ func (l *Lease) LeaseID() string {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.leaseID
+}
+
+// Payload returns the immutable JSON payload associated with the job.
+func (l *Lease) Payload() json.RawMessage {
+	if l == nil {
+		return nil
+	}
+	if l.payload == nil {
+		return json.RawMessage(`{}`)
+	}
+	cpy := make(json.RawMessage, len(l.payload))
+	copy(cpy, l.payload)
+	return cpy
 }
 
 // LeaseExpiry reports the local notion of when the lease expires.
@@ -168,6 +179,16 @@ func (l *Lease) updateExpiry(newExpiry time.Time) {
 	l.mu.Lock()
 	l.leaseExpires = newExpiry
 	l.mu.Unlock()
+}
+
+// NextNeed returns the capability the job is currently queued under.
+func (l *Lease) NextNeed() Capability {
+	if l == nil {
+		return ""
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.capability
 }
 
 func (l *Lease) startKeepAlive(db *sql.DB) {

@@ -76,12 +76,16 @@ func (l *Lease) extendInternal(ctx context.Context, db DB, seconds int, worker W
 	return nil
 }
 
-// Reschedule releases the lease and updates the job dependencies.
-func (l *Lease) Reschedule(ctx context.Context, db DB, deps JobDependencies) error {
+// Reschedule releases the lease, updates dependencies, and optionally replaces the payload.
+func (l *Lease) Reschedule(ctx context.Context, db DB, deps JobDependencies, payload any) error {
 	if err := l.validateActive(); err != nil {
 		return err
 	}
 	if err := deps.validate(); err != nil {
+		return err
+	}
+	payloadArg, err := normalizePayloadOverride(payload)
+	if err != nil {
 		return err
 	}
 	row := db.QueryRowContext(ctx, rescheduleStmt,
@@ -90,8 +94,8 @@ func (l *Lease) Reschedule(ctx context.Context, db DB, deps JobDependencies) err
 		string(l.worker),
 		string(deps.NextNeed),
 		pq.Array(deps.waitForStrings()),
-		deps.singletonArg(),
 		deps.availableAtArg(),
+		payloadArg,
 	)
 
 	var (

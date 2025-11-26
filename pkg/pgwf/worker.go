@@ -3,6 +3,7 @@ package pgwf
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 )
 
 const getWorkStmt = `
-SELECT job_id, lease_id, next_need, singleton_key, wait_for, available_at, lease_expires_at
+SELECT job_id, lease_id, next_need, wait_for, payload, available_at, lease_expires_at
 FROM pgwf.get_work($1, $2, $3, $4)
 `
 
@@ -36,13 +37,13 @@ func GetWork(ctx context.Context, db DB, worker WorkerID, capabilities []Capabil
 		jobID     string
 		leaseID   string
 		need      string
-		singleton sql.NullString
 		waits     pq.StringArray
+		payload   json.RawMessage
 		available time.Time
 		expires   time.Time
 	)
 
-	if err := row.Scan(&jobID, &leaseID, &need, &singleton, (*pq.StringArray)(&waits), &available, &expires); err != nil {
+	if err := row.Scan(&jobID, &leaseID, &need, (*pq.StringArray)(&waits), &payload, &available, &expires); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -54,6 +55,7 @@ func GetWork(ctx context.Context, db DB, worker WorkerID, capabilities []Capabil
 		leaseID:      leaseID,
 		worker:       worker,
 		capability:   Capability(need),
+		payload:      payload,
 		leaseExpires: expires,
 	}
 	return lease, nil

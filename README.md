@@ -12,10 +12,13 @@
 ### Submission
 
 ```go
-func SubmitJob(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, deps pgwf.JobDependencies, worker pgwf.WorkerID) error
+func SubmitJob(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, deps pgwf.JobDependencies, payload any, worker pgwf.WorkerID, singletonKey string, expiresAt time.Time) error
 ```
 
 - Validates non-empty IDs and required dependency fields.
+- Accepts an immutable JSON payload (object, ≤512 bytes stored) that workers will receive on lease.
+- Optional `singletonKey` enforces one active job per key at submission time; pass `""` to skip.
+- Optional `expiresAt` sets `pgwf.jobs.expires_at`; leave zero to keep the job leaseable indefinitely.
 - Accepts `*sql.DB` or `*sql.Tx`, enabling atomic submission alongside your own business tables.
 - Wraps dependency/singleton violations in `pgwf.ErrDependencyViolation`.
 
@@ -28,29 +31,32 @@ func AwaitWork(ctx context.Context, db pgwf.DB, worker pgwf.WorkerID, capabiliti
 
 - `GetWork` is a single call to `pgwf.get_work` (limit 1, 60‑second lease).
 - `AwaitWork` wraps `GetWork` in an exponential backoff loop until the context is done or a lease is returned.
+- `Lease.Payload()` returns the job payload as raw JSON (default `{}` if unset).
 
 ### Lease helpers
 
 ```go
 func (l *pgwf.Lease) WithKeepAlive(db *sql.DB) *pgwf.Lease
 func (l *pgwf.Lease) Extend(ctx context.Context, db pgwf.DB, additional time.Duration) error
-func (l *pgwf.Lease) Reschedule(ctx context.Context, db pgwf.DB, deps pgwf.JobDependencies) error
+func (l *pgwf.Lease) Reschedule(ctx context.Context, db pgwf.DB, deps pgwf.JobDependencies, payload any) error
 func (l *pgwf.Lease) Complete(ctx context.Context, db pgwf.DB) error
 ```
 
 - Each method verifies the lease is present, unreleased, and unexpired before reaching the database and returns `pgwf.ErrLeaseExpired` immediately if not.
 - `WithKeepAlive` spins up an internal goroutine (using a real `*sql.DB`) that refreshes the lease until you complete or reschedule it.
+- `Reschedule` optionally replaces the payload while updating dependencies; pass `nil` to leave the current payload intact.
 - Error helpers wrap driver errors in sentinel `pgwf.ErrLeaseMismatch`, `pgwf.ErrJobNotFound`, or `pgwf.ErrDependencyViolation` values for easier inspection.
 
 ### Unheld job helpers
 
 ```go
 func pgwf.CompleteUnheldJob(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, worker pgwf.WorkerID) error
-func pgwf.RescheduleUnheldJob(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, worker pgwf.WorkerID, deps pgwf.JobDependencies) error
+func pgwf.RescheduleUnheldJob(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, worker pgwf.WorkerID, deps pgwf.JobDependencies, payload any) error
 ```
 
 - Mirror the lease-based APIs but operate directly on ready jobs by ID (no lease required).
 - Require the caller to declare the acting worker for trace/log context and reuse the same dependency validation rules as `Lease.Reschedule`.
+- Supply a payload to override the stored JSON object during reschedule; pass `nil` to keep the existing payload.
 
 ### Cancellation
 
@@ -103,11 +109,11 @@ func enqueueEmail(ctx context.Context, db *sql.DB, emailID string) error {
         return err
     }
     deps := pgwf.JobDependencies{
-        NextNeed:    pgwf.Capability("send_email"),
-        WaitFor:     nil,
-        SingletonKey: emailID, // prevent duplicates
+        NextNeed: pgwf.Capability("send_email"),
+        WaitFor:  nil,
     }
-    if err := pgwf.SubmitJob(ctx, tx, pgwf.JobID(emailID), deps, pgwf.WorkerID("api")); err != nil {
+    payload := map[string]any{"email_id": emailID}
+    if err := pgwf.SubmitJob(ctx, tx, pgwf.JobID(emailID), deps, payload, pgwf.WorkerID("api"), emailID, time.Time{}); err != nil {
         return err
     }
     return tx.Commit()
@@ -134,7 +140,9 @@ func workerLoop(ctx context.Context, db *sql.DB) {
                 NextNeed:    pgwf.Capability("send_email"),
                 AvailableAt: time.Now().Add(5 * time.Minute),
             }
-            if rerr := lease.Reschedule(ctx, db, deps); rerr != nil {
+            // include the failure reason so the next run can react accordingly
+            newPayload := map[string]any{"email_id": emailID, "last_error": err.Error()}
+            if rerr := lease.Reschedule(ctx, db, deps, newPayload); rerr != nil {
                 log.Printf("reschedule failed: %v", rerr)
             }
             continue

@@ -4,23 +4,22 @@ import "testing"
 
 func TestSingletonArg(t *testing.T) {
 	t.Parallel()
-	var deps JobDependencies
-	if deps.singletonArg() != nil {
-		t.Fatalf("zero value singleton should be nil")
+	tests := []struct {
+		name string
+		key  string
+		want any
+	}{
+		{name: "zero value", key: "", want: nil},
+		{name: "empty", key: "", want: nil},
+		{name: "value", key: "foo", want: "foo"},
 	}
-
-	deps.SingletonKey = ""
-	if deps.singletonArg() != nil {
-		t.Fatalf("empty singleton should be nil")
-	}
-
-	deps.SingletonKey = "foo"
-	got := deps.singletonArg()
-	key, ok := got.(string)
-	if !ok {
-		t.Fatalf("expected string, got %T", got)
-	}
-	if key != "foo" {
-		t.Fatalf("singleton arg mismatch: got %q", key)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := singletonArg(tc.key); got != tc.want {
+				t.Fatalf("singleton arg mismatch: got %v want %v", got, tc.want)
+			}
+		})
 	}
 }

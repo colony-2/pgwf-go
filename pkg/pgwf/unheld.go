@@ -42,8 +42,8 @@ func CompleteUnheldJob(ctx context.Context, db DB, jobID JobID, worker WorkerID)
 	return nil
 }
 
-// RescheduleUnheldJob updates the dependencies/availability for a ready job without re-leasing.
-func RescheduleUnheldJob(ctx context.Context, db DB, jobID JobID, worker WorkerID, deps JobDependencies) error {
+// RescheduleUnheldJob updates dependencies/availability (and optional payload) for a ready job without re-leasing.
+func RescheduleUnheldJob(ctx context.Context, db DB, jobID JobID, worker WorkerID, deps JobDependencies, payload any) error {
 	if db == nil {
 		return fmt.Errorf("pgwf: nil DB")
 	}
@@ -59,14 +59,18 @@ func RescheduleUnheldJob(ctx context.Context, db DB, jobID JobID, worker WorkerI
 	if err := deps.validate(); err != nil {
 		return err
 	}
+	payloadArg, err := normalizePayloadOverride(payload)
+	if err != nil {
+		return err
+	}
 
 	row := db.QueryRowContext(ctx, rescheduleUnheldStmt,
 		string(jobID),
 		string(worker),
 		string(deps.NextNeed),
 		pq.Array(deps.waitForStrings()),
-		deps.singletonArg(),
 		deps.availableAtArg(),
+		payloadArg,
 	)
 
 	var (
