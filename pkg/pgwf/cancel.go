@@ -7,17 +7,20 @@ import (
 
 const cancelStmt = `
 SELECT cancel_requested
-FROM pgwf.cancel_job($1, $2, $3)
+FROM pgwf.cancel_job($1, $2, $3, $4)
 `
 
 // CancelJob requests cancellation for the given job_id via pgwf.cancel_job.
 // If the job is already cancelled, the function succeeds without error.
-func CancelJob(ctx context.Context, db DB, jobID JobID, worker WorkerID, reason string) error {
+func CancelJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, worker WorkerID, reason string) error {
 	if db == nil {
 		return fmt.Errorf("pgwf: nil DB")
 	}
 	if ctx == nil {
 		return fmt.Errorf("pgwf: nil context")
+	}
+	if tenantID == "" {
+		return fmt.Errorf("pgwf: tenant id is required")
 	}
 	if jobID == "" {
 		return fmt.Errorf("pgwf: job id is required")
@@ -31,7 +34,7 @@ func CancelJob(ctx context.Context, db DB, jobID JobID, worker WorkerID, reason 
 		reasonArg = reason
 	}
 
-	row := db.QueryRowContext(ctx, cancelStmt, string(jobID), string(worker), reasonArg)
+	row := db.QueryRowContext(ctx, cancelStmt, string(tenantID), string(jobID), string(worker), reasonArg)
 	var cancelled bool
 	if err := row.Scan(&cancelled); err != nil {
 		return annotateError(err)

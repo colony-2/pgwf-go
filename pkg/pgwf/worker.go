@@ -11,12 +11,13 @@ import (
 )
 
 const getWorkStmt = `
-SELECT job_id, lease_id, next_need, wait_for, payload, available_at, lease_expires_at
-FROM pgwf.get_work($1, $2, $3, $4)
+SELECT tenant_id, job_id, lease_id, next_need, wait_for, payload, available_at, lease_expires_at
+FROM pgwf.get_work($1, $2, $3, $4, $5)
 `
 
 // GetWork attempts to fetch a single job lease matching the provided capabilities.
-func GetWork(ctx context.Context, db DB, worker WorkerID, capabilities []Capability) (*Lease, error) {
+// tenantIDs filters which tenants to serve; nil means all tenants.
+func GetWork(ctx context.Context, db DB, worker WorkerID, capabilities []Capability, tenantIDs []TenantID) (*Lease, error) {
 	if db == nil {
 		return nil, fmt.Errorf("pgwf: nil DB")
 	}
@@ -31,9 +32,11 @@ func GetWork(ctx context.Context, db DB, worker WorkerID, capabilities []Capabil
 	}
 
 	caps := capabilitiesToStrings(capabilities)
-	row := db.QueryRowContext(ctx, getWorkStmt, string(worker), pq.Array(caps), defaultLeaseSeconds, 1)
+	tenants := tenantIDsToStrings(tenantIDs)
+	row := db.QueryRowContext(ctx, getWorkStmt, string(worker), pq.Array(caps), pq.Array(tenants), defaultLeaseSeconds, 1)
 
 	var (
+		tenantID  string
 		jobID     string
 		leaseID   string
 		need      string
@@ -43,7 +46,7 @@ func GetWork(ctx context.Context, db DB, worker WorkerID, capabilities []Capabil
 		expires   time.Time
 	)
 
-	if err := row.Scan(&jobID, &leaseID, &need, (*pq.StringArray)(&waits), &payload, &available, &expires); err != nil {
+	if err := row.Scan(&tenantID, &jobID, &leaseID, &need, (*pq.StringArray)(&waits), &payload, &available, &expires); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -51,6 +54,7 @@ func GetWork(ctx context.Context, db DB, worker WorkerID, capabilities []Capabil
 	}
 
 	lease := &Lease{
+		tenantID:     TenantID(tenantID),
 		jobID:        JobID(jobID),
 		leaseID:      leaseID,
 		worker:       worker,
@@ -62,13 +66,14 @@ func GetWork(ctx context.Context, db DB, worker WorkerID, capabilities []Capabil
 }
 
 // AwaitWork polls pgwf.get_work with exponential backoff until a lease is found or the context ends.
-func AwaitWork(ctx context.Context, db DB, worker WorkerID, caps []Capability) (*Lease, error) {
+// tenantIDs filters which tenants to serve; nil means all tenants.
+func AwaitWork(ctx context.Context, db DB, worker WorkerID, caps []Capability, tenantIDs []TenantID) (*Lease, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("pgwf: nil context")
 	}
 	backoff := initialBackoff
 	for {
-		lease, err := GetWork(ctx, db, worker, caps)
+		lease, err := GetWork(ctx, db, worker, caps, tenantIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -98,6 +103,20 @@ func capabilitiesToStrings(caps []Capability) []string {
 			continue
 		}
 		out = append(out, string(c))
+	}
+	return out
+}
+
+func tenantIDsToStrings(tenantIDs []TenantID) []string {
+	if tenantIDs == nil {
+		return nil
+	}
+	out := make([]string, 0, len(tenantIDs))
+	for _, t := range tenantIDs {
+		if t == "" {
+			continue
+		}
+		out = append(out, string(t))
 	}
 	return out
 }

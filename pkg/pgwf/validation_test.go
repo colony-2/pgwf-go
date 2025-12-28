@@ -19,30 +19,32 @@ func TestSubmitJobValidationErrors(t *testing.T) {
 	ctx := context.Background()
 	deps := JobDependencies{NextNeed: Capability("cap")}
 	cases := []struct {
-		name   string
-		ctx    context.Context
-		db     DB
-		jobID  JobID
-		worker WorkerID
-		deps   JobDependencies
+		name     string
+		ctx      context.Context
+		db       DB
+		tenantID TenantID
+		jobID    JobID
+		worker   WorkerID
+		deps     JobDependencies
 	}{
-		{name: "nil db", ctx: ctx, db: nil, jobID: "job", worker: "w", deps: deps},
-		{name: "nil ctx", ctx: nil, db: stubDB{}, jobID: "job", worker: "w", deps: deps},
-		{name: "empty job", ctx: ctx, db: stubDB{}, jobID: "", worker: "w", deps: deps},
-		{name: "empty worker", ctx: ctx, db: stubDB{}, jobID: "job", worker: "", deps: deps},
-		{name: "missing capability", ctx: ctx, db: stubDB{}, jobID: "job", worker: "w", deps: JobDependencies{}},
+		{name: "nil db", ctx: ctx, db: nil, tenantID: "tenant", jobID: "job", worker: "w", deps: deps},
+		{name: "nil ctx", ctx: nil, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "w", deps: deps},
+		{name: "empty tenant", ctx: ctx, db: stubDB{}, tenantID: "", jobID: "job", worker: "w", deps: deps},
+		{name: "empty job", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "", worker: "w", deps: deps},
+		{name: "empty worker", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "", deps: deps},
+		{name: "missing capability", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "w", deps: JobDependencies{}},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			if err := SubmitJob(tc.ctx, tc.db, tc.jobID, tc.deps, nil, tc.worker, "", time.Time{}); err == nil {
+			if err := SubmitJob(tc.ctx, tc.db, tc.tenantID, tc.jobID, tc.deps, nil, tc.worker, "", time.Time{}); err == nil {
 				t.Fatalf("expected error for %s", tc.name)
 			}
 		})
 	}
 
 	t.Run("payload not object", func(t *testing.T) {
-		if err := SubmitJob(ctx, stubDB{}, "job", deps, []string{"not an object"}, "w", "", time.Time{}); err == nil {
+		if err := SubmitJob(ctx, stubDB{}, "tenant", "job", deps, []string{"not an object"}, "w", "", time.Time{}); err == nil {
 			t.Fatalf("expected payload validation error")
 		}
 	})
@@ -66,7 +68,7 @@ func TestGetWorkValidationErrors(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := GetWork(tc.ctx, tc.db, tc.worker, tc.caps); err == nil {
+			if _, err := GetWork(tc.ctx, tc.db, tc.worker, tc.caps, nil); err == nil {
 				t.Fatalf("expected error for %s", tc.name)
 			}
 		})
@@ -75,7 +77,7 @@ func TestGetWorkValidationErrors(t *testing.T) {
 
 func TestAwaitWorkValidation(t *testing.T) {
 	t.Parallel()
-	if _, err := AwaitWork(nil, stubDB{}, WorkerID("w"), []Capability{"cap"}); err == nil {
+	if _, err := AwaitWork(nil, stubDB{}, WorkerID("w"), []Capability{"cap"}, nil); err == nil {
 		t.Fatalf("expected nil context error")
 	}
 }
@@ -83,7 +85,7 @@ func TestAwaitWorkValidation(t *testing.T) {
 func TestLeaseExtendValidation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	lease := &Lease{jobID: "job", leaseID: "lease", worker: "worker", leaseExpires: time.Now().Add(time.Minute)}
+	lease := &Lease{tenantID: "tenant", jobID: "job", leaseID: "lease", worker: "worker", leaseExpires: time.Now().Add(time.Minute)}
 	if err := lease.Extend(ctx, nil, time.Second); err == nil {
 		t.Fatalf("expected nil db error")
 	}
@@ -95,7 +97,7 @@ func TestLeaseExtendValidation(t *testing.T) {
 func TestLeaseRescheduleValidation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	lease := &Lease{jobID: "job", leaseID: "lease", worker: "worker", leaseExpires: time.Now().Add(time.Minute)}
+	lease := &Lease{tenantID: "tenant", jobID: "job", leaseID: "lease", worker: "worker", leaseExpires: time.Now().Add(time.Minute)}
 	if err := lease.Reschedule(ctx, stubDB{}, JobDependencies{}, nil); err == nil {
 		t.Fatalf("expected validation error")
 	}
@@ -108,21 +110,23 @@ func TestCompleteUnheldValidation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	cases := []struct {
-		name   string
-		ctx    context.Context
-		db     DB
-		jobID  JobID
-		worker WorkerID
+		name     string
+		ctx      context.Context
+		db       DB
+		tenantID TenantID
+		jobID    JobID
+		worker   WorkerID
 	}{
-		{name: "nil db", ctx: ctx, db: nil, jobID: "job", worker: "worker"},
-		{name: "nil ctx", ctx: nil, db: stubDB{}, jobID: "job", worker: "worker"},
-		{name: "empty job", ctx: ctx, db: stubDB{}, jobID: "", worker: "worker"},
-		{name: "empty worker", ctx: ctx, db: stubDB{}, jobID: "job", worker: ""},
+		{name: "nil db", ctx: ctx, db: nil, tenantID: "tenant", jobID: "job", worker: "worker"},
+		{name: "nil ctx", ctx: nil, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "worker"},
+		{name: "empty tenant", ctx: ctx, db: stubDB{}, tenantID: "", jobID: "job", worker: "worker"},
+		{name: "empty job", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "", worker: "worker"},
+		{name: "empty worker", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: ""},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			if err := CompleteUnheldJob(tc.ctx, tc.db, tc.jobID, tc.worker); err == nil {
+			if err := CompleteUnheldJob(tc.ctx, tc.db, tc.tenantID, tc.jobID, tc.worker); err == nil {
 				t.Fatalf("expected error for %s", tc.name)
 			}
 		})
@@ -134,30 +138,32 @@ func TestRescheduleUnheldValidation(t *testing.T) {
 	ctx := context.Background()
 	deps := JobDependencies{NextNeed: Capability("cap")}
 	cases := []struct {
-		name   string
-		ctx    context.Context
-		db     DB
-		jobID  JobID
-		worker WorkerID
-		deps   JobDependencies
+		name     string
+		ctx      context.Context
+		db       DB
+		tenantID TenantID
+		jobID    JobID
+		worker   WorkerID
+		deps     JobDependencies
 	}{
-		{name: "nil db", ctx: ctx, db: nil, jobID: "job", worker: "worker", deps: deps},
-		{name: "nil ctx", ctx: nil, db: stubDB{}, jobID: "job", worker: "worker", deps: deps},
-		{name: "empty job", ctx: ctx, db: stubDB{}, jobID: "", worker: "worker", deps: deps},
-		{name: "empty worker", ctx: ctx, db: stubDB{}, jobID: "job", worker: "", deps: deps},
-		{name: "missing deps", ctx: ctx, db: stubDB{}, jobID: "job", worker: "worker", deps: JobDependencies{}},
+		{name: "nil db", ctx: ctx, db: nil, tenantID: "tenant", jobID: "job", worker: "worker", deps: deps},
+		{name: "nil ctx", ctx: nil, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "worker", deps: deps},
+		{name: "empty tenant", ctx: ctx, db: stubDB{}, tenantID: "", jobID: "job", worker: "worker", deps: deps},
+		{name: "empty job", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "", worker: "worker", deps: deps},
+		{name: "empty worker", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "", deps: deps},
+		{name: "missing deps", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "worker", deps: JobDependencies{}},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			if err := RescheduleUnheldJob(tc.ctx, tc.db, tc.jobID, tc.worker, tc.deps, nil); err == nil {
+			if err := RescheduleUnheldJob(tc.ctx, tc.db, tc.tenantID, tc.jobID, tc.worker, tc.deps, nil); err == nil {
 				t.Fatalf("expected error for %s", tc.name)
 			}
 		})
 	}
 
 	t.Run("invalid payload", func(t *testing.T) {
-		if err := RescheduleUnheldJob(ctx, stubDB{}, "job", "worker", deps, []string{"not an object"}); err == nil {
+		if err := RescheduleUnheldJob(ctx, stubDB{}, "tenant", "job", "worker", deps, []string{"not an object"}); err == nil {
 			t.Fatalf("expected payload validation error")
 		}
 	})
@@ -167,21 +173,23 @@ func TestCancelJobValidation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	cases := []struct {
-		name   string
-		ctx    context.Context
-		db     DB
-		jobID  JobID
-		worker WorkerID
+		name     string
+		ctx      context.Context
+		db       DB
+		tenantID TenantID
+		jobID    JobID
+		worker   WorkerID
 	}{
-		{name: "nil db", ctx: ctx, db: nil, jobID: "job", worker: "worker"},
-		{name: "nil ctx", ctx: nil, db: stubDB{}, jobID: "job", worker: "worker"},
-		{name: "empty job", ctx: ctx, db: stubDB{}, jobID: "", worker: "worker"},
-		{name: "empty worker", ctx: ctx, db: stubDB{}, jobID: "job", worker: ""},
+		{name: "nil db", ctx: ctx, db: nil, tenantID: "tenant", jobID: "job", worker: "worker"},
+		{name: "nil ctx", ctx: nil, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "worker"},
+		{name: "empty tenant", ctx: ctx, db: stubDB{}, tenantID: "", jobID: "job", worker: "worker"},
+		{name: "empty job", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "", worker: "worker"},
+		{name: "empty worker", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: ""},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			if err := CancelJob(tc.ctx, tc.db, tc.jobID, tc.worker, "reason"); err == nil {
+			if err := CancelJob(tc.ctx, tc.db, tc.tenantID, tc.jobID, tc.worker, "reason"); err == nil {
 				t.Fatalf("expected error for %s", tc.name)
 			}
 		})

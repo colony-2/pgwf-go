@@ -18,14 +18,16 @@ import (
 	"github.com/colony-2/pgwf-go/pkg/pgwf"
 )
 
+const testTenantID = pgwf.TenantID("test-tenant")
+
 func TestSubmitGetComplete(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("ingest")}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-1"), deps, nil, pgwf.WorkerID("producer"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-1"), deps, nil, pgwf.WorkerID("producer"), "", time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
-		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-a"), []pgwf.Capability{"ingest"})
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-a"), []pgwf.Capability{"ingest"}, nil)
 		if err != nil {
 			t.Fatalf("get work: %v", err)
 		}
@@ -47,11 +49,11 @@ func TestSubmitWithExpiry(t *testing.T) {
 		deps := pgwf.JobDependencies{
 			NextNeed: pgwf.Capability("expiring"),
 		}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-expired"), deps, nil, pgwf.WorkerID("producer"), "", time.Now().Add(-time.Hour)); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-expired"), deps, nil, pgwf.WorkerID("producer"), "", time.Now().Add(-time.Hour)); err != nil {
 			t.Fatalf("submit with expiry: %v", err)
 		}
 
-		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-expire"), []pgwf.Capability{"expiring"})
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-expire"), []pgwf.Capability{"expiring"}, nil)
 		if err != nil {
 			t.Fatalf("get work for expired job: %v", err)
 		}
@@ -65,11 +67,11 @@ func TestSubmitWithPayload(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("payload")}
 		payload := map[string]any{"hello": "world", "n": 3}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-with-payload"), deps, payload, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-with-payload"), deps, payload, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
 			t.Fatalf("submit with payload: %v", err)
 		}
 
-		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("payload-worker"), []pgwf.Capability{"payload"})
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("payload-worker"), []pgwf.Capability{"payload"}, nil)
 		if err != nil {
 			t.Fatalf("get work: %v", err)
 		}
@@ -92,11 +94,11 @@ func TestSubmitWithPayload(t *testing.T) {
 func TestRescheduleFlow(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("step1")}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-resched"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-resched"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
-		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-step1"), []pgwf.Capability{"step1"})
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-step1"), []pgwf.Capability{"step1"}, nil)
 		if err != nil {
 			t.Fatalf("get work: %v", err)
 		}
@@ -110,7 +112,7 @@ func TestRescheduleFlow(t *testing.T) {
 			t.Fatalf("reschedule: %v", err)
 		}
 
-		lease2, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-step2"), []pgwf.Capability{"step2"})
+		lease2, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-step2"), []pgwf.Capability{"step2"}, nil)
 		if err != nil {
 			t.Fatalf("get work step2: %v", err)
 		}
@@ -134,11 +136,11 @@ func TestRescheduleFlow(t *testing.T) {
 func TestLeaseExtend(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("extend")}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("job-extend"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-extend"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
-		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-extend"), []pgwf.Capability{"extend"})
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-extend"), []pgwf.Capability{"extend"}, nil)
 		if err != nil {
 			t.Fatalf("get work: %v", err)
 		}
@@ -163,15 +165,15 @@ func TestLeaseExtend(t *testing.T) {
 func TestCompleteUnheldJob(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("adhoc")}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("adhoc-job"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("adhoc-job"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
-		if err := pgwf.CompleteUnheldJob(ctx, db, pgwf.JobID("adhoc-job"), pgwf.WorkerID("maintainer")); err != nil {
+		if err := pgwf.CompleteUnheldJob(ctx, db, testTenantID, pgwf.JobID("adhoc-job"), pgwf.WorkerID("maintainer")); err != nil {
 			t.Fatalf("complete unheld: %v", err)
 		}
 
-		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-adhoc"), []pgwf.Capability{"adhoc"})
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-adhoc"), []pgwf.Capability{"adhoc"}, nil)
 		if err != nil {
 			t.Fatalf("get work after unheld complete: %v", err)
 		}
@@ -184,7 +186,7 @@ func TestCompleteUnheldJob(t *testing.T) {
 func TestRescheduleUnheldJob(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("initial")}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("unheld-resched"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("unheld-resched"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -193,11 +195,11 @@ func TestRescheduleUnheldJob(t *testing.T) {
 			AvailableAt: time.Now(),
 		}
 		payload := map[string]any{"phase": "rescheduled"}
-		if err := pgwf.RescheduleUnheldJob(ctx, db, pgwf.JobID("unheld-resched"), pgwf.WorkerID("scheduler"), newDeps, payload); err != nil {
+		if err := pgwf.RescheduleUnheldJob(ctx, db, testTenantID, pgwf.JobID("unheld-resched"), pgwf.WorkerID("scheduler"), newDeps, payload); err != nil {
 			t.Fatalf("reschedule unheld: %v", err)
 		}
 
-		leaseOld, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-old"), []pgwf.Capability{"initial"})
+		leaseOld, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-old"), []pgwf.Capability{"initial"}, nil)
 		if err != nil {
 			t.Fatalf("get work initial: %v", err)
 		}
@@ -205,7 +207,7 @@ func TestRescheduleUnheldJob(t *testing.T) {
 			t.Fatalf("expected job not to be leased under initial capability")
 		}
 
-		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-new"), []pgwf.Capability{"rescheduled"})
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-new"), []pgwf.Capability{"rescheduled"}, nil)
 		if err != nil {
 			t.Fatalf("get work rescheduled: %v", err)
 		}
@@ -235,7 +237,7 @@ func TestAwaitWork(t *testing.T) {
 
 		done := make(chan error, 1)
 		go func() {
-			lease, err := pgwf.AwaitWork(ctx, db, pgwf.WorkerID("await-worker"), []pgwf.Capability{"await"})
+			lease, err := pgwf.AwaitWork(ctx, db, pgwf.WorkerID("await-worker"), []pgwf.Capability{"await"}, nil)
 			if err != nil {
 				done <- err
 				return
@@ -249,7 +251,7 @@ func TestAwaitWork(t *testing.T) {
 
 		time.Sleep(500 * time.Millisecond)
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("await")}
-		if err := pgwf.SubmitJob(ctx, db, pgwf.JobID("await-job"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("await-job"), deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 

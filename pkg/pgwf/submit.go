@@ -12,17 +12,20 @@ import (
 
 const submitStmt = `
 SELECT job_id, next_need, wait_for, payload, available_at
-FROM pgwf.submit_job($1, $2, $3, $4, $5, $6, $7, $8)
+FROM pgwf.submit_job($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 // SubmitJob inserts workflow metadata using pgwf.submit_job.
 // expiresAt is optional; zero value keeps the job leaseable indefinitely.
-func SubmitJob(ctx context.Context, db DB, jobID JobID, deps JobDependencies, payload any, worker WorkerID, singletonKey string, expiresAt time.Time) error {
+func SubmitJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, deps JobDependencies, payload any, worker WorkerID, singletonKey string, expiresAt time.Time) error {
 	if db == nil {
 		return fmt.Errorf("pgwf: nil DB")
 	}
 	if ctx == nil {
 		return fmt.Errorf("pgwf: nil context")
+	}
+	if tenantID == "" {
+		return fmt.Errorf("pgwf: tenant id is required")
 	}
 	if jobID == "" {
 		return fmt.Errorf("pgwf: job id is required")
@@ -39,6 +42,7 @@ func SubmitJob(ctx context.Context, db DB, jobID JobID, deps JobDependencies, pa
 	}
 
 	row := db.QueryRowContext(ctx, submitStmt,
+		string(tenantID),
 		string(jobID),
 		string(worker),
 		string(deps.NextNeed),

@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// TenantID uniquely identifies a tenant in pgwf.
+type TenantID string
+
 // JobID uniquely identifies a job in pgwf.
 type JobID string
 
@@ -85,6 +88,7 @@ var (
 
 // Lease models a pgwf lease token.
 type Lease struct {
+	tenantID     TenantID
 	jobID        JobID
 	leaseID      string
 	worker       WorkerID
@@ -98,6 +102,16 @@ type Lease struct {
 	keepAliveDone    chan struct{}
 	keepAliveDB      *sql.DB
 	keepAliveStarted bool
+}
+
+// TenantID returns the tenant identifier associated with this lease.
+func (l *Lease) TenantID() TenantID {
+	if l == nil {
+		return ""
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.tenantID
 }
 
 // JobID returns the job identifier associated with this lease.

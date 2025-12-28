@@ -11,12 +11,12 @@ import (
 )
 
 const (
-	extendStmt     = `SELECT pgwf.extend_lease($1, $2, $3, $4)`
+	extendStmt     = `SELECT pgwf.extend_lease($1, $2, $3, $4, $5)`
 	rescheduleStmt = `
 SELECT job_id, next_need, wait_for, available_at
-FROM pgwf.reschedule_job($1, $2, $3, $4, $5, $6, $7)
+FROM pgwf.reschedule_job($1, $2, $3, $4, $5, $6, $7, $8)
 `
-	completeStmt = `SELECT pgwf.complete_job($1, $2, $3)`
+	completeStmt = `SELECT pgwf.complete_job($1, $2, $3, $4)`
 )
 
 // WithKeepAlive spawns a goroutine that periodically extends the lease until released.
@@ -67,7 +67,7 @@ func (l *Lease) extendInternal(ctx context.Context, db DB, seconds int, worker W
 	if db == nil {
 		return fmt.Errorf("pgwf: nil DB")
 	}
-	row := db.QueryRowContext(ctx, extendStmt, string(l.jobID), l.leaseID, string(worker), seconds)
+	row := db.QueryRowContext(ctx, extendStmt, string(l.tenantID), string(l.jobID), l.leaseID, string(worker), seconds)
 	var newExpiry time.Time
 	if err := row.Scan(&newExpiry); err != nil {
 		return annotateError(err)
@@ -89,6 +89,7 @@ func (l *Lease) Reschedule(ctx context.Context, db DB, deps JobDependencies, pay
 		return err
 	}
 	row := db.QueryRowContext(ctx, rescheduleStmt,
+		string(l.tenantID),
 		string(l.jobID),
 		l.leaseID,
 		string(l.worker),
@@ -116,7 +117,7 @@ func (l *Lease) Complete(ctx context.Context, db DB) error {
 	if err := l.validateActive(); err != nil {
 		return err
 	}
-	row := db.QueryRowContext(ctx, completeStmt, string(l.jobID), l.leaseID, string(l.worker))
+	row := db.QueryRowContext(ctx, completeStmt, string(l.tenantID), string(l.jobID), l.leaseID, string(l.worker))
 	var ok bool
 	if err := row.Scan(&ok); err != nil {
 		return annotateError(err)
