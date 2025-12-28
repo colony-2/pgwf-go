@@ -345,3 +345,506 @@ func withBareDatabase(t *testing.T, fn func(context.Context, *sql.DB)) {
 
 	fn(ctx, sqlDB)
 }
+
+// Query API Integration Tests
+
+func TestGetJobStatus_ActiveJob(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit a job
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("process")}
+		jobID := pgwf.JobID("status-test-active")
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, map[string]any{"test": "data"}, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit job: %v", err)
+		}
+
+		// Get status - should be READY
+		status, err := pgwf.GetJobStatus(ctx, db, testTenantID, jobID)
+		if err != nil {
+			t.Fatalf("get job status: %v", err)
+		}
+		if status.Status != pgwf.JobStatusReady {
+			t.Errorf("expected READY status, got %s", status.Status)
+		}
+		if status.JobID != string(jobID) {
+			t.Errorf("expected job_id %s, got %s", jobID, status.JobID)
+		}
+		if status.TenantID != string(testTenantID) {
+			t.Errorf("expected tenant_id %s, got %s", testTenantID, status.TenantID)
+		}
+		if status.NextNeed != "process" {
+			t.Errorf("expected next_need 'process', got %s", status.NextNeed)
+		}
+		if status.ArchivedAt != nil {
+			t.Errorf("expected nil archived_at for active job")
+		}
+
+		// Lease the job
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker"), []pgwf.Capability{"process"}, nil)
+		if err != nil {
+			t.Fatalf("get work: %v", err)
+		}
+		if lease == nil {
+			t.Fatalf("expected lease")
+		}
+
+		// Get status again - should be ACTIVE
+		status, err = pgwf.GetJobStatus(ctx, db, testTenantID, jobID)
+		if err != nil {
+			t.Fatalf("get job status after lease: %v", err)
+		}
+		if status.Status != pgwf.JobStatusActive {
+			t.Errorf("expected ACTIVE status after lease, got %s", status.Status)
+		}
+		if status.LeaseID == nil {
+			t.Errorf("expected lease_id to be populated")
+		}
+
+		// Complete the job
+		if err := lease.Complete(ctx, db); err != nil {
+			t.Fatalf("complete job: %v", err)
+		}
+	})
+}
+
+func TestGetJobStatus_ArchivedJob(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit and complete a job
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("archive-test")}
+		jobID := pgwf.JobID("status-test-archived")
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit job: %v", err)
+		}
+
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker"), []pgwf.Capability{"archive-test"}, nil)
+		if err != nil {
+			t.Fatalf("get work: %v", err)
+		}
+		if err := lease.Complete(ctx, db); err != nil {
+			t.Fatalf("complete job: %v", err)
+		}
+
+		// Get status - should find archived job
+		status, err := pgwf.GetJobStatus(ctx, db, testTenantID, jobID)
+		if err != nil {
+			t.Fatalf("get job status: %v", err)
+		}
+		if status.ArchivedAt == nil {
+			t.Errorf("expected archived_at to be populated")
+		}
+		if status.CancelRequested {
+			t.Errorf("expected cancel_requested to be false")
+		}
+	})
+}
+
+func TestGetJobStatus_NotFound(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		_, err := pgwf.GetJobStatus(ctx, db, testTenantID, "nonexistent-job")
+		if !errors.Is(err, pgwf.ErrJobNotFound) {
+			t.Errorf("expected ErrJobNotFound, got %v", err)
+		}
+	})
+}
+
+func TestCheckJobExists(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit a job
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("exists-test")}
+		jobID := pgwf.JobID("exists-test-job")
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit job: %v", err)
+		}
+
+		// Check exists
+		exists, err := pgwf.CheckJobExists(ctx, db, testTenantID, jobID)
+		if err != nil {
+			t.Fatalf("check job exists: %v", err)
+		}
+		if !exists.Exists {
+			t.Errorf("expected job to exist")
+		}
+		if exists.JobID != string(jobID) {
+			t.Errorf("expected job_id %s, got %s", jobID, exists.JobID)
+		}
+
+		// Check nonexistent job
+		exists, err = pgwf.CheckJobExists(ctx, db, testTenantID, "nonexistent")
+		if err != nil {
+			t.Fatalf("check nonexistent job: %v", err)
+		}
+		if exists.Exists {
+			t.Errorf("expected job not to exist")
+		}
+	})
+}
+
+func TestCheckJobExistsWithTenant(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit a job
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("tenant-test")}
+		jobID := pgwf.JobID("tenant-test-job")
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit job: %v", err)
+		}
+
+		// Check with correct tenant
+		exists, err := pgwf.CheckJobExistsWithTenant(ctx, db, jobID, testTenantID)
+		if err != nil {
+			t.Fatalf("check with correct tenant: %v", err)
+		}
+		if !exists.Exists {
+			t.Errorf("expected job to exist")
+		}
+
+		// Check with wrong tenant
+		_, err = pgwf.CheckJobExistsWithTenant(ctx, db, jobID, "wrong-tenant")
+		if !errors.Is(err, pgwf.ErrTenantMismatch) {
+			t.Errorf("expected ErrTenantMismatch, got %v", err)
+		}
+
+		// Check nonexistent job
+		_, err = pgwf.CheckJobExistsWithTenant(ctx, db, "nonexistent", testTenantID)
+		if !errors.Is(err, pgwf.ErrJobNotFound) {
+			t.Errorf("expected ErrJobNotFound, got %v", err)
+		}
+	})
+}
+
+func TestGetJob_WithAndWithoutPayload(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit a job with payload
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("payload-test")}
+		jobID := pgwf.JobID("getjob-payload-test")
+		payload := map[string]any{"key": "value", "number": 42}
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, payload, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit job: %v", err)
+		}
+
+		// Get without payload
+		job, err := pgwf.GetJob(ctx, db, testTenantID, jobID, pgwf.GetJobOptions{IncludePayload: false})
+		if err != nil {
+			t.Fatalf("get job without payload: %v", err)
+		}
+		if job.Payload != nil {
+			t.Errorf("expected nil payload when IncludePayload=false, got %v", job.Payload)
+		}
+		if job.NextNeed != "payload-test" {
+			t.Errorf("expected next_need 'payload-test', got %s", job.NextNeed)
+		}
+
+		// Get with payload
+		job, err = pgwf.GetJob(ctx, db, testTenantID, jobID, pgwf.GetJobOptions{IncludePayload: true})
+		if err != nil {
+			t.Fatalf("get job with payload: %v", err)
+		}
+		if job.Payload == nil {
+			t.Errorf("expected payload when IncludePayload=true")
+		}
+		var gotPayload map[string]any
+		if err := json.Unmarshal(job.Payload, &gotPayload); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		if gotPayload["key"] != "value" || gotPayload["number"] != float64(42) {
+			t.Errorf("payload mismatch: %v", gotPayload)
+		}
+	})
+}
+
+func TestFindJobs(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit multiple jobs with same capability
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("find-test")}
+		for i := 0; i < 5; i++ {
+			jobID := pgwf.JobID(fmt.Sprintf("find-test-%d", i))
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+				t.Fatalf("submit job %d: %v", i, err)
+			}
+		}
+
+		// Submit job with different capability
+		deps2 := pgwf.JobDependencies{NextNeed: pgwf.Capability("other-cap")}
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, "other-job", deps2, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit other job: %v", err)
+		}
+
+		// Find jobs with specific capability
+		jobs, err := pgwf.FindJobs(ctx, db, pgwf.FindJobsOptions{
+			TenantIDs: []string{string(testTenantID)},
+			Status:    pgwf.JobStatusReady,
+			NextNeed:  "find-test",
+			Limit:     10,
+		})
+		if err != nil {
+			t.Fatalf("find jobs: %v", err)
+		}
+		if len(jobs) != 5 {
+			t.Errorf("expected 5 jobs, got %d", len(jobs))
+		}
+		for _, job := range jobs {
+			if job.NextNeed != "find-test" {
+				t.Errorf("expected next_need 'find-test', got %s", job.NextNeed)
+			}
+			if job.Status != pgwf.JobStatusReady {
+				t.Errorf("expected READY status, got %s", job.Status)
+			}
+		}
+	})
+}
+
+func TestListJobs_WithFilters(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit jobs with different states
+		// Ready job
+		deps1 := pgwf.JobDependencies{NextNeed: pgwf.Capability("list-test")}
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, "list-ready", deps1, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit ready job: %v", err)
+		}
+
+		// Active job (leased)
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, "list-active", deps1, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit active job: %v", err)
+		}
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker"), []pgwf.Capability{"list-test"}, nil)
+		if err != nil {
+			t.Fatalf("lease job: %v", err)
+		}
+		if lease.JobID() != "list-active" {
+			// Try to get the right job
+			_ = lease.Complete(ctx, db)
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, "list-active-2", deps1, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+				t.Fatalf("submit active job 2: %v", err)
+			}
+			lease, err = pgwf.GetWork(ctx, db, pgwf.WorkerID("worker"), []pgwf.Capability{"list-test"}, nil)
+			if err != nil {
+				t.Fatalf("lease job 2: %v", err)
+			}
+		}
+
+		// Completed job
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, "list-completed", deps1, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit completed job: %v", err)
+		}
+		completeLease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker2"), []pgwf.Capability{"list-test"}, nil)
+		if err != nil {
+			t.Fatalf("lease completed job: %v", err)
+		}
+		if err := completeLease.Complete(ctx, db); err != nil {
+			t.Fatalf("complete job: %v", err)
+		}
+
+		// List only READY jobs
+		result, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID: string(testTenantID),
+			Statuses: []pgwf.JobStatus{pgwf.JobStatusReady},
+			Limit:    10,
+		})
+		if err != nil {
+			t.Fatalf("list ready jobs: %v", err)
+		}
+		readyCount := 0
+		for _, job := range result.Jobs {
+			if job.Status == pgwf.JobStatusReady {
+				readyCount++
+			}
+		}
+		if readyCount == 0 {
+			t.Errorf("expected at least one READY job")
+		}
+
+		// List with IncludeArchived
+		result, err = pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID:        string(testTenantID),
+			IncludeArchived: true,
+			Limit:           10,
+		})
+		if err != nil {
+			t.Fatalf("list with archived: %v", err)
+		}
+		foundArchived := false
+		for _, job := range result.Jobs {
+			if job.ArchivedAt != nil {
+				foundArchived = true
+				break
+			}
+		}
+		if !foundArchived {
+			t.Errorf("expected to find archived jobs when IncludeArchived=true")
+		}
+	})
+}
+
+func TestGetJobStatusBatch(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit multiple jobs
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("batch-test")}
+		jobIDs := []pgwf.JobID{"batch-1", "batch-2", "batch-3"}
+		for _, jobID := range jobIDs {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+				t.Fatalf("submit job %s: %v", jobID, err)
+			}
+		}
+
+		// Get batch status
+		statuses, err := pgwf.GetJobStatusBatch(ctx, db, testTenantID, jobIDs)
+		if err != nil {
+			t.Fatalf("get batch status: %v", err)
+		}
+		if len(statuses) != 3 {
+			t.Errorf("expected 3 statuses, got %d", len(statuses))
+		}
+		for _, jobID := range jobIDs {
+			status, ok := statuses[string(jobID)]
+			if !ok {
+				t.Errorf("expected status for job %s", jobID)
+				continue
+			}
+			if status.Status != pgwf.JobStatusReady {
+				t.Errorf("expected READY status for %s, got %s", jobID, status.Status)
+			}
+		}
+
+		// Test with nonexistent jobs mixed in
+		mixedIDs := append(jobIDs, "nonexistent-1", "nonexistent-2")
+		statuses, err = pgwf.GetJobStatusBatch(ctx, db, testTenantID, mixedIDs)
+		if err != nil {
+			t.Fatalf("get batch with nonexistent: %v", err)
+		}
+		if len(statuses) != 3 {
+			t.Errorf("expected 3 statuses (existing only), got %d", len(statuses))
+		}
+	})
+}
+
+func TestIsJobArchived(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit and complete a job
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("archived-check")}
+		jobID := pgwf.JobID("archived-check-job")
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit job: %v", err)
+		}
+
+		// Check before archiving
+		archived, err := pgwf.IsJobArchived(ctx, db, testTenantID, jobID)
+		if err != nil {
+			t.Fatalf("check archived before: %v", err)
+		}
+		if archived {
+			t.Errorf("expected job not to be archived initially")
+		}
+
+		// Complete the job
+		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker"), []pgwf.Capability{"archived-check"}, nil)
+		if err != nil {
+			t.Fatalf("get work: %v", err)
+		}
+		if err := lease.Complete(ctx, db); err != nil {
+			t.Fatalf("complete job: %v", err)
+		}
+
+		// Check after archiving
+		archived, err = pgwf.IsJobArchived(ctx, db, testTenantID, jobID)
+		if err != nil {
+			t.Fatalf("check archived after: %v", err)
+		}
+		if !archived {
+			t.Errorf("expected job to be archived after completion")
+		}
+	})
+}
+
+func TestListArchivedJobs(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit and complete multiple jobs
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("archive-list")}
+		for i := 0; i < 3; i++ {
+			jobID := pgwf.JobID(fmt.Sprintf("archive-list-%d", i))
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+				t.Fatalf("submit job %d: %v", i, err)
+			}
+			lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker"), []pgwf.Capability{"archive-list"}, nil)
+			if err != nil {
+				t.Fatalf("get work %d: %v", i, err)
+			}
+			if err := lease.Complete(ctx, db); err != nil {
+				t.Fatalf("complete job %d: %v", i, err)
+			}
+		}
+
+		// List archived jobs
+		result, err := pgwf.ListArchivedJobs(ctx, db, pgwf.ListArchivedJobsOptions{
+			TenantID: string(testTenantID),
+			Limit:    10,
+		})
+		if err != nil {
+			t.Fatalf("list archived jobs: %v", err)
+		}
+		if len(result.Jobs) < 3 {
+			t.Errorf("expected at least 3 archived jobs, got %d", len(result.Jobs))
+		}
+		for _, job := range result.Jobs {
+			if job.ArchivedAt == nil {
+				t.Errorf("expected archived_at to be populated for job %s", job.JobID)
+			}
+		}
+	})
+}
+
+func TestListJobs_Pagination(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit many jobs
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("pagination-test")}
+		for i := 0; i < 10; i++ {
+			jobID := pgwf.JobID(fmt.Sprintf("page-test-%d", i))
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+				t.Fatalf("submit job %d: %v", i, err)
+			}
+		}
+
+		// List with small limit
+		result, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID: string(testTenantID),
+			Limit:    3,
+		})
+		if err != nil {
+			t.Fatalf("list jobs: %v", err)
+		}
+		if len(result.Jobs) != 3 {
+			t.Errorf("expected 3 jobs with limit=3, got %d", len(result.Jobs))
+		}
+		if !result.HasMore {
+			t.Errorf("expected HasMore=true when there are more results")
+		}
+	})
+}
+
+func TestGetJobStatus_CancelledJob(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit a job
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("cancel-test")}
+		jobID := pgwf.JobID("cancel-status-test")
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit job: %v", err)
+		}
+
+		// Cancel the job
+		if err := pgwf.CancelJob(ctx, db, testTenantID, jobID, pgwf.WorkerID("canceller"), "test cancellation"); err != nil {
+			t.Fatalf("cancel job: %v", err)
+		}
+
+		// Get status
+		status, err := pgwf.GetJobStatus(ctx, db, testTenantID, jobID)
+		if err != nil {
+			t.Fatalf("get job status: %v", err)
+		}
+		if status.Status != pgwf.JobStatusCancelled {
+			t.Errorf("expected CANCELLED status, got %s", status.Status)
+		}
+		if !status.CancelRequested {
+			t.Errorf("expected cancel_requested to be true")
+		}
+		if status.CancelRequestedBy == nil || *status.CancelRequestedBy != "canceller" {
+			t.Errorf("expected cancel_requested_by to be 'canceller'")
+		}
+	})
+}

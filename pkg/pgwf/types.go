@@ -27,6 +27,7 @@ type WorkerID string
 // DB captures the minimal subset used by pgwf helpers.
 type DB interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
 // JobDependencies define when/how a job becomes runnable.

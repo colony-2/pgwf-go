@@ -14,6 +14,10 @@ func (stubDB) QueryRowContext(context.Context, string, ...any) *sql.Row {
 	return new(sql.Row)
 }
 
+func (stubDB) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
+	return nil, nil
+}
+
 func TestSubmitJobValidationErrors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
