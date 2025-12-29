@@ -2,7 +2,9 @@ package pgwf
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -87,14 +89,18 @@ type JobListItem struct {
 
 // ListJobsOptions specifies filtering and pagination options for listing jobs
 type ListJobsOptions struct {
-	// Filtering
-	TenantID        string      // Filter by tenant (required for multi-tenant systems)
-	Statuses        []JobStatus // Filter by status (empty = all statuses)
-	JobTypePattern  string      // Filter by job type pattern (SQL LIKE pattern)
-	SingletonKey    string      // Filter by singleton key
-	CreatedAfter    *time.Time  // Filter by creation time
-	CreatedBefore   *time.Time
-	IncludeArchived bool // Whether to include archived jobs (default: false, only active)
+	// Filtering - Tenant
+	TenantID  string   // DEPRECATED: Use TenantIDs for single or multiple tenants
+	TenantIDs []string // Filter by tenant IDs (if both TenantID and TenantIDs are provided, TenantIDs takes precedence)
+
+	// Filtering - Status and Type
+	Statuses         []JobStatus // Filter by status (empty = all statuses)
+	JobTypePattern   string      // DEPRECATED: Use JobTypePatterns for single or multiple patterns
+	JobTypePatterns  []string    // Filter by job type patterns (SQL LIKE patterns, OR semantics)
+	SingletonKey     string      // Filter by singleton key
+	CreatedAfter     *time.Time  // Filter by creation time
+	CreatedBefore    *time.Time
+	IncludeArchived  bool        // Whether to include archived jobs (default: false, only active)
 
 	// Pagination
 	Limit  int    // Max results to return (default: 100, max: 1000)
@@ -1071,6 +1077,176 @@ func scanJobStatusInfoArchiveRows(rows interface{ Scan(...interface{}) error }) 
 	return &info, nil
 }
 
+// paginationCursor encodes the position in result set for stateless pagination
+type paginationCursor struct {
+	LastSortValue string    `json:"last_sort_value"` // Last value of sort field from previous page
+	LastJobID     string    `json:"last_job_id"`     // Last job_id from previous page
+	QueryHash     string    `json:"query_hash"`      // Hash of query parameters for validation
+	SortBy        SortField `json:"sort_by"`
+	SortOrder     SortDirection `json:"sort_order"`
+}
+
+// encodeCursor encodes a cursor to an opaque base64 string
+func encodeCursor(lastJob *JobListItem, opts ListJobsOptions) (string, error) {
+	if lastJob == nil {
+		return "", nil
+	}
+
+	cursor := paginationCursor{
+		LastJobID: lastJob.JobID,
+		SortBy:    opts.SortBy,
+		SortOrder: opts.SortOrder,
+		QueryHash: hashListJobsOptions(opts),
+	}
+
+	// Extract sort field value based on SortBy
+	switch opts.SortBy {
+	case SortByCreatedAt:
+		cursor.LastSortValue = lastJob.CreatedAt.Format(time.RFC3339Nano)
+	case SortByAvailableAt:
+		cursor.LastSortValue = lastJob.AvailableAt.Format(time.RFC3339Nano)
+	case SortByJobID:
+		cursor.LastSortValue = lastJob.JobID
+	default:
+		cursor.LastSortValue = lastJob.CreatedAt.Format(time.RFC3339Nano)
+	}
+
+	// Encode to opaque string
+	data, err := json.Marshal(cursor)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode cursor: %w", err)
+	}
+	return base64.URLEncoding.EncodeToString(data), nil
+}
+
+// decodeCursor decodes and validates a cursor string
+func decodeCursor(cursorStr string, opts ListJobsOptions) (*paginationCursor, error) {
+	if cursorStr == "" {
+		return nil, nil
+	}
+
+	data, err := base64.URLEncoding.DecodeString(cursorStr)
+	if err != nil {
+		return nil, wrap(ErrInvalidCursor, fmt.Errorf("failed to decode cursor: %w", err))
+	}
+
+	var cursor paginationCursor
+	if err := json.Unmarshal(data, &cursor); err != nil {
+		return nil, wrap(ErrInvalidCursor, fmt.Errorf("failed to unmarshal cursor: %w", err))
+	}
+
+	// Validate cursor matches current query parameters
+	currentHash := hashListJobsOptions(opts)
+	if cursor.QueryHash != currentHash {
+		return nil, wrap(ErrInvalidCursor, fmt.Errorf("cursor does not match current query parameters"))
+	}
+
+	// Validate sort parameters match
+	if cursor.SortBy != opts.SortBy || cursor.SortOrder != opts.SortOrder {
+		return nil, wrap(ErrInvalidCursor, fmt.Errorf("cursor sort parameters do not match current query"))
+	}
+
+	return &cursor, nil
+}
+
+// hashListJobsOptions creates a hash of the query parameters to validate cursor consistency
+func hashListJobsOptions(opts ListJobsOptions) string {
+	h := sha256.New()
+
+	// Include all filter parameters that affect query results
+	// Note: We don't include Limit or Cursor as those are pagination controls
+	fmt.Fprintf(h, "tenant_id:%s;", opts.TenantID)
+
+	// Include TenantIDs if present
+	for _, tid := range opts.TenantIDs {
+		fmt.Fprintf(h, "tid:%s;", tid)
+	}
+
+	for _, status := range opts.Statuses {
+		fmt.Fprintf(h, "status:%s;", status)
+	}
+
+	fmt.Fprintf(h, "job_type_pattern:%s;", opts.JobTypePattern)
+
+	// Include JobTypePatterns if present
+	for _, pattern := range opts.JobTypePatterns {
+		fmt.Fprintf(h, "jtp:%s;", pattern)
+	}
+
+	fmt.Fprintf(h, "singleton_key:%s;", opts.SingletonKey)
+	fmt.Fprintf(h, "include_archived:%t;", opts.IncludeArchived)
+
+	if opts.CreatedAfter != nil {
+		fmt.Fprintf(h, "created_after:%s;", opts.CreatedAfter.Format(time.RFC3339Nano))
+	}
+	if opts.CreatedBefore != nil {
+		fmt.Fprintf(h, "created_before:%s;", opts.CreatedBefore.Format(time.RFC3339Nano))
+	}
+
+	// Sort parameters are validated separately, so we include them
+	fmt.Fprintf(h, "sort_by:%s;sort_order:%s", opts.SortBy, opts.SortOrder)
+
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// buildCursorCondition builds a WHERE clause condition for cursor-based pagination
+// Returns the condition string and the args to append
+func buildCursorCondition(cursor *paginationCursor, sortBy SortField, sortOrder SortDirection, argIdx int) (string, []interface{}) {
+	if cursor == nil {
+		return "", nil
+	}
+
+	var args []interface{}
+
+	// Parse the last sort value back to appropriate type
+	var lastSortValue interface{}
+	switch sortBy {
+	case SortByCreatedAt, SortByAvailableAt:
+		// Parse timestamp
+		t, err := time.Parse(time.RFC3339Nano, cursor.LastSortValue)
+		if err != nil {
+			// If parsing fails, return empty condition to avoid errors
+			return "", nil
+		}
+		lastSortValue = t
+	case SortByJobID:
+		lastSortValue = cursor.LastSortValue
+	default:
+		// Default to created_at
+		t, err := time.Parse(time.RFC3339Nano, cursor.LastSortValue)
+		if err != nil {
+			return "", nil
+		}
+		lastSortValue = t
+	}
+
+	// Build row comparison condition
+	// For DESC: WHERE (sort_field, job_id) < (cursor_value, cursor_job_id)
+	// For ASC:  WHERE (sort_field, job_id) > (cursor_value, cursor_job_id)
+	sortField := string(sortBy)
+	operator := ">"
+	if sortOrder == SortDesc {
+		operator = "<"
+	}
+
+	condition := fmt.Sprintf("(%s, job_id) %s ($%d, $%d)", sortField, operator, argIdx, argIdx+1)
+	args = append(args, lastSortValue, cursor.LastJobID)
+
+	return condition, args
+}
+
+// joinStrings joins strings with a separator
+func joinStrings(strs []string, sep string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	result := strs[0]
+	for i := 1; i < len(strs); i++ {
+		result += sep + strs[i]
+	}
+	return result
+}
+
 // ListJobs queries jobs with filtering and pagination.
 // The cursor returned in ListJobsResult can be used for the next page.
 func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult, error) {
@@ -1080,8 +1256,22 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 	if ctx == nil {
 		return nil, fmt.Errorf("pgwf: nil context")
 	}
-	if opts.TenantID == "" {
-		return nil, wrap(ErrInvalidOptions, fmt.Errorf("tenant_id is required"))
+
+	// Determine which tenant filter to use
+	tenantIDs := opts.TenantIDs
+	if len(tenantIDs) == 0 && opts.TenantID != "" {
+		// Backwards compatibility: use TenantID if TenantIDs is empty
+		tenantIDs = []string{opts.TenantID}
+	}
+	if len(tenantIDs) == 0 {
+		return nil, wrap(ErrInvalidOptions, fmt.Errorf("tenant_id or tenant_ids is required"))
+	}
+
+	// Determine which job type filter to use
+	jobTypePatterns := opts.JobTypePatterns
+	if len(jobTypePatterns) == 0 && opts.JobTypePattern != "" {
+		// Backwards compatibility: use JobTypePattern if JobTypePatterns is empty
+		jobTypePatterns = []string{opts.JobTypePattern}
 	}
 
 	limit := opts.Limit
@@ -1102,14 +1292,26 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 		sortOrder = SortDesc
 	}
 
+	// Update opts with normalized values for cursor hashing
+	opts.SortBy = sortBy
+	opts.SortOrder = sortOrder
+	opts.TenantIDs = tenantIDs
+	opts.JobTypePatterns = jobTypePatterns
+
+	// Decode cursor if present
+	cursor, err := decodeCursor(opts.Cursor, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	// Build WHERE clause
 	var conditions []string
 	var args []interface{}
 	argIdx := 1
 
-	// Always filter by tenant
-	conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIdx))
-	args = append(args, opts.TenantID)
+	// Multi-tenant filter
+	conditions = append(conditions, fmt.Sprintf("tenant_id = ANY($%d)", argIdx))
+	args = append(args, pq.Array(tenantIDs))
 	argIdx++
 
 	// Status filter
@@ -1123,11 +1325,15 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 		argIdx++
 	}
 
-	// Job type pattern filter
-	if opts.JobTypePattern != "" {
-		conditions = append(conditions, fmt.Sprintf("next_need LIKE $%d", argIdx))
-		args = append(args, opts.JobTypePattern)
-		argIdx++
+	// Multi-pattern job type filter
+	if len(jobTypePatterns) > 0 {
+		patterns := make([]string, len(jobTypePatterns))
+		for i := 0; i < len(jobTypePatterns); i++ {
+			patterns[i] = fmt.Sprintf("next_need LIKE $%d", argIdx)
+			args = append(args, jobTypePatterns[i])
+			argIdx++
+		}
+		conditions = append(conditions, "("+joinStrings(patterns, " OR ")+")")
 	}
 
 	// Singleton key filter
@@ -1151,6 +1357,16 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 		argIdx++
 	}
 
+	// Add cursor-based pagination condition
+	if cursor != nil {
+		cursorCondition, cursorArgs := buildCursorCondition(cursor, sortBy, sortOrder, argIdx)
+		if cursorCondition != "" {
+			conditions = append(conditions, cursorCondition)
+			args = append(args, cursorArgs...)
+			argIdx += len(cursorArgs)
+		}
+	}
+
 	whereClause := "WHERE " + conditions[0]
 	for i := 1; i < len(conditions); i++ {
 		whereClause += " AND " + conditions[i]
@@ -1158,6 +1374,9 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 
 	// Build query - query active jobs only by default unless IncludeArchived is true
 	var query string
+	// Include job_id in ORDER BY for stable pagination (tie-breaking)
+	orderByClause := fmt.Sprintf("%s %s, job_id %s", sortBy, sortOrder, sortOrder)
+
 	if opts.IncludeArchived {
 		// Query both active and archived with UNION
 		query = fmt.Sprintf(`
@@ -1188,9 +1407,9 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 				cancel_requested, cancel_requested_by, cancel_requested_at
 			FROM pgwf.jobs_archive
 			%s
-			ORDER BY %s %s
+			ORDER BY %s
 			LIMIT $%d
-		`, whereClause, whereClause, sortBy, sortOrder, argIdx)
+		`, whereClause, whereClause, orderByClause, argIdx)
 	} else {
 		// Query only active jobs
 		query = fmt.Sprintf(`
@@ -1206,9 +1425,9 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 				cancel_requested, cancel_requested_by, cancel_requested_at
 			FROM pgwf.jobs_with_status
 			%s
-			ORDER BY %s %s
+			ORDER BY %s
 			LIMIT $%d
-		`, whereClause, sortBy, sortOrder, argIdx)
+		`, whereClause, orderByClause, argIdx)
 	}
 
 	args = append(args, limit+1) // Fetch one extra to determine if there are more results
@@ -1243,10 +1462,14 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 		HasMore: hasMore,
 	}
 
-	// For now, leave cursor implementation as empty string
-	// Full cursor-based pagination can be added later if needed
-	if hasMore {
-		result.NextCursor = "next-page" // Placeholder
+	// Generate next cursor if there are more results
+	if hasMore && len(jobs) > 0 {
+		lastJob := &jobs[len(jobs)-1]
+		nextCursor, err := encodeCursor(lastJob, opts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode next cursor: %w", err)
+		}
+		result.NextCursor = nextCursor
 	}
 
 	return result, nil

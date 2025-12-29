@@ -848,3 +848,471 @@ func TestGetJobStatus_CancelledJob(t *testing.T) {
 		}
 	})
 }
+
+// Integration tests for new cursor-based pagination, multi-tenant, and multi-pattern features
+
+func TestListJobs_CursorPagination(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit 10 jobs
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("cursor-test")}
+		for i := 0; i < 10; i++ {
+			jobID := pgwf.JobID(fmt.Sprintf("cursor-job-%02d", i))
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+				t.Fatalf("submit job %d: %v", i, err)
+			}
+			time.Sleep(time.Millisecond) // Ensure different timestamps
+		}
+
+		// Page 1: Get first 3 jobs
+		result1, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID:  string(testTenantID),
+			Limit:     3,
+			SortBy:    pgwf.SortByCreatedAt,
+			SortOrder: pgwf.SortDesc,
+		})
+		if err != nil {
+			t.Fatalf("list page 1: %v", err)
+		}
+		if len(result1.Jobs) != 3 {
+			t.Errorf("expected 3 jobs on page 1, got %d", len(result1.Jobs))
+		}
+		if !result1.HasMore {
+			t.Error("expected HasMore=true on page 1")
+		}
+		if result1.NextCursor == "" {
+			t.Error("expected non-empty NextCursor on page 1")
+		}
+
+		// Page 2: Use cursor to get next 3 jobs
+		result2, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID:  string(testTenantID),
+			Cursor:    result1.NextCursor,
+			Limit:     3,
+			SortBy:    pgwf.SortByCreatedAt,
+			SortOrder: pgwf.SortDesc,
+		})
+		if err != nil {
+			t.Fatalf("list page 2: %v", err)
+		}
+		if len(result2.Jobs) != 3 {
+			t.Errorf("expected 3 jobs on page 2, got %d", len(result2.Jobs))
+		}
+		if !result2.HasMore {
+			t.Error("expected HasMore=true on page 2")
+		}
+
+		// Verify no duplicates between pages
+		page1IDs := make(map[string]bool)
+		for _, job := range result1.Jobs {
+			page1IDs[job.JobID] = true
+		}
+		for _, job := range result2.Jobs {
+			if page1IDs[job.JobID] {
+				t.Errorf("duplicate job %s found across pages", job.JobID)
+			}
+		}
+
+		// Page 3: Get remaining jobs
+		result3, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID:  string(testTenantID),
+			Cursor:    result2.NextCursor,
+			Limit:     3,
+			SortBy:    pgwf.SortByCreatedAt,
+			SortOrder: pgwf.SortDesc,
+		})
+		if err != nil {
+			t.Fatalf("list page 3: %v", err)
+		}
+		if len(result3.Jobs) != 3 {
+			t.Errorf("expected 3 jobs on page 3, got %d", len(result3.Jobs))
+		}
+		if !result3.HasMore {
+			t.Error("expected HasMore=true on page 3")
+		}
+
+		// Page 4: Final page
+		result4, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID:  string(testTenantID),
+			Cursor:    result3.NextCursor,
+			Limit:     3,
+			SortBy:    pgwf.SortByCreatedAt,
+			SortOrder: pgwf.SortDesc,
+		})
+		if err != nil {
+			t.Fatalf("list page 4: %v", err)
+		}
+		if len(result4.Jobs) != 1 {
+			t.Errorf("expected 1 job on page 4, got %d", len(result4.Jobs))
+		}
+		if result4.HasMore {
+			t.Error("expected HasMore=false on final page")
+		}
+		if result4.NextCursor != "" {
+			t.Error("expected empty NextCursor on final page")
+		}
+
+		// Verify total unique jobs across all pages
+		allJobIDs := make(map[string]bool)
+		for _, job := range result1.Jobs {
+			allJobIDs[job.JobID] = true
+		}
+		for _, job := range result2.Jobs {
+			allJobIDs[job.JobID] = true
+		}
+		for _, job := range result3.Jobs {
+			allJobIDs[job.JobID] = true
+		}
+		for _, job := range result4.Jobs {
+			allJobIDs[job.JobID] = true
+		}
+		if len(allJobIDs) != 10 {
+			t.Errorf("expected 10 unique jobs across all pages, got %d", len(allJobIDs))
+		}
+	})
+}
+
+func TestListJobs_CursorInvalidation(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit some jobs
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("cursor-invalid")}
+		for i := 0; i < 5; i++ {
+			jobID := pgwf.JobID(fmt.Sprintf("invalid-cursor-job-%d", i))
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+				t.Fatalf("submit job %d: %v", i, err)
+			}
+		}
+
+		// Get first page
+		result1, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID:  string(testTenantID),
+			Limit:     2,
+			SortBy:    pgwf.SortByCreatedAt,
+			SortOrder: pgwf.SortDesc,
+		})
+		if err != nil {
+			t.Fatalf("list page 1: %v", err)
+		}
+
+		// Try to use cursor with different query parameters (should fail)
+		_, err = pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID:  string(testTenantID),
+			Cursor:    result1.NextCursor,
+			Limit:     2,
+			SortBy:    pgwf.SortByAvailableAt, // Different sort field!
+			SortOrder: pgwf.SortDesc,
+		})
+		if err == nil {
+			t.Error("expected error when using cursor with different sort field")
+		}
+		if !errors.Is(err, pgwf.ErrInvalidCursor) {
+			t.Errorf("expected ErrInvalidCursor, got %v", err)
+		}
+
+		// Try with different tenant (should fail)
+		_, err = pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID:  "different-tenant",
+			Cursor:    result1.NextCursor,
+			Limit:     2,
+			SortBy:    pgwf.SortByCreatedAt,
+			SortOrder: pgwf.SortDesc,
+		})
+		if err == nil {
+			t.Error("expected error when using cursor with different tenant")
+		}
+		if !errors.Is(err, pgwf.ErrInvalidCursor) {
+			t.Errorf("expected ErrInvalidCursor, got %v", err)
+		}
+	})
+}
+
+func TestListJobs_MultiTenantFiltering(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		tenant1 := pgwf.TenantID("tenant-1")
+		tenant2 := pgwf.TenantID("tenant-2")
+		tenant3 := pgwf.TenantID("tenant-3")
+
+		// Submit jobs for different tenants
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("multi-tenant-test")}
+		for i := 0; i < 3; i++ {
+			if err := pgwf.SubmitJob(ctx, db, tenant1, pgwf.JobID(fmt.Sprintf("t1-job-%d", i)), deps, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+				t.Fatalf("submit tenant1 job: %v", err)
+			}
+		}
+		for i := 0; i < 4; i++ {
+			if err := pgwf.SubmitJob(ctx, db, tenant2, pgwf.JobID(fmt.Sprintf("t2-job-%d", i)), deps, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+				t.Fatalf("submit tenant2 job: %v", err)
+			}
+		}
+		for i := 0; i < 2; i++ {
+			if err := pgwf.SubmitJob(ctx, db, tenant3, pgwf.JobID(fmt.Sprintf("t3-job-%d", i)), deps, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+				t.Fatalf("submit tenant3 job: %v", err)
+			}
+		}
+
+		// Query single tenant
+		result1, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID: string(tenant1),
+			Limit:    100,
+		})
+		if err != nil {
+			t.Fatalf("list tenant1: %v", err)
+		}
+		if len(result1.Jobs) != 3 {
+			t.Errorf("expected 3 jobs for tenant1, got %d", len(result1.Jobs))
+		}
+		for _, job := range result1.Jobs {
+			if job.TenantID != string(tenant1) {
+				t.Errorf("expected tenant_id %s, got %s", tenant1, job.TenantID)
+			}
+		}
+
+		// Query multiple tenants using TenantIDs
+		result2, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantIDs: []string{string(tenant1), string(tenant2)},
+			Limit:     100,
+		})
+		if err != nil {
+			t.Fatalf("list tenant1+2: %v", err)
+		}
+		if len(result2.Jobs) != 7 {
+			t.Errorf("expected 7 jobs for tenant1+2, got %d", len(result2.Jobs))
+		}
+
+		// Verify all jobs belong to tenant1 or tenant2
+		for _, job := range result2.Jobs {
+			if job.TenantID != string(tenant1) && job.TenantID != string(tenant2) {
+				t.Errorf("unexpected tenant_id %s", job.TenantID)
+			}
+		}
+
+		// Query all three tenants
+		result3, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantIDs: []string{string(tenant1), string(tenant2), string(tenant3)},
+			Limit:     100,
+		})
+		if err != nil {
+			t.Fatalf("list all tenants: %v", err)
+		}
+		if len(result3.Jobs) != 9 {
+			t.Errorf("expected 9 jobs for all tenants, got %d", len(result3.Jobs))
+		}
+	})
+}
+
+func TestListJobs_MultiPatternFiltering(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit jobs with different job types
+		jobTypes := []string{
+			"workflow1:step1",
+			"workflow1:step2",
+			"workflow2:step1",
+			"workflow2:step2",
+			"batch:process",
+			"batch:finalize",
+			"email:send",
+			"other:task",
+		}
+
+		for i, jobType := range jobTypes {
+			deps := pgwf.JobDependencies{NextNeed: pgwf.Capability(jobType)}
+			jobID := pgwf.JobID(fmt.Sprintf("pattern-job-%d", i))
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+				t.Fatalf("submit job %d: %v", i, err)
+			}
+		}
+
+		// Query single pattern
+		result1, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID:       string(testTenantID),
+			JobTypePattern: "workflow1:%",
+			Limit:          100,
+		})
+		if err != nil {
+			t.Fatalf("list workflow1: %v", err)
+		}
+		if len(result1.Jobs) != 2 {
+			t.Errorf("expected 2 workflow1 jobs, got %d", len(result1.Jobs))
+		}
+
+		// Query multiple patterns using JobTypePatterns
+		result2, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID: string(testTenantID),
+			JobTypePatterns: []string{
+				"workflow1:%",
+				"workflow2:%",
+			},
+			Limit: 100,
+		})
+		if err != nil {
+			t.Fatalf("list workflow1+2: %v", err)
+		}
+		if len(result2.Jobs) != 4 {
+			t.Errorf("expected 4 workflow jobs, got %d", len(result2.Jobs))
+		}
+
+		// Query with exact match pattern
+		result3, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID: string(testTenantID),
+			JobTypePatterns: []string{
+				"batch:process",
+			},
+			Limit: 100,
+		})
+		if err != nil {
+			t.Fatalf("list exact batch:process: %v", err)
+		}
+		if len(result3.Jobs) != 1 {
+			t.Errorf("expected 1 batch:process job, got %d", len(result3.Jobs))
+		}
+
+		// Query multiple patterns with exact and wildcard
+		result4, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID: string(testTenantID),
+			JobTypePatterns: []string{
+				"batch:%",
+				"email:send",
+			},
+			Limit: 100,
+		})
+		if err != nil {
+			t.Fatalf("list batch+email: %v", err)
+		}
+		if len(result4.Jobs) != 3 {
+			t.Errorf("expected 3 batch+email jobs, got %d", len(result4.Jobs))
+		}
+	})
+}
+
+func TestListJobs_CursorWithMultiTenantAndMultiPattern(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		tenant1 := pgwf.TenantID("cursor-tenant-1")
+		tenant2 := pgwf.TenantID("cursor-tenant-2")
+
+		// Submit jobs with different patterns for both tenants
+		for i := 0; i < 5; i++ {
+			deps1 := pgwf.JobDependencies{NextNeed: pgwf.Capability("type-a:task")}
+			deps2 := pgwf.JobDependencies{NextNeed: pgwf.Capability("type-b:task")}
+
+			if err := pgwf.SubmitJob(ctx, db, tenant1, pgwf.JobID(fmt.Sprintf("t1-a-%d", i)), deps1, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+				t.Fatalf("submit t1 type-a: %v", err)
+			}
+			if err := pgwf.SubmitJob(ctx, db, tenant1, pgwf.JobID(fmt.Sprintf("t1-b-%d", i)), deps2, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+				t.Fatalf("submit t1 type-b: %v", err)
+			}
+			if err := pgwf.SubmitJob(ctx, db, tenant2, pgwf.JobID(fmt.Sprintf("t2-a-%d", i)), deps1, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+				t.Fatalf("submit t2 type-a: %v", err)
+			}
+			time.Sleep(time.Millisecond)
+		}
+
+		// Query with multi-tenant, multi-pattern, and pagination
+		opts := pgwf.ListJobsOptions{
+			TenantIDs: []string{string(tenant1), string(tenant2)},
+			JobTypePatterns: []string{
+				"type-a:%",
+				"type-b:%",
+			},
+			Limit:     5,
+			SortBy:    pgwf.SortByCreatedAt,
+			SortOrder: pgwf.SortDesc,
+		}
+
+		// Collect all jobs across pages
+		var allJobs []pgwf.JobListItem
+		for {
+			result, err := pgwf.ListJobs(ctx, db, opts)
+			if err != nil {
+				t.Fatalf("list jobs: %v", err)
+			}
+			allJobs = append(allJobs, result.Jobs...)
+
+			if !result.HasMore {
+				break
+			}
+			opts.Cursor = result.NextCursor
+		}
+
+		// Verify we got all 15 jobs (5 type-a + 5 type-b for tenant1, 5 type-a for tenant2)
+		if len(allJobs) != 15 {
+			t.Errorf("expected 15 jobs total, got %d", len(allJobs))
+		}
+
+		// Verify no duplicates
+		seen := make(map[string]bool)
+		for _, job := range allJobs {
+			key := job.TenantID + ":" + job.JobID
+			if seen[key] {
+				t.Errorf("duplicate job found: %s", key)
+			}
+			seen[key] = true
+		}
+	})
+}
+
+func TestListJobs_SortingConsistency(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		// Submit jobs with varying available_at times
+		now := time.Now()
+		for i := 0; i < 5; i++ {
+			deps := pgwf.JobDependencies{
+				NextNeed:    pgwf.Capability("sort-test"),
+				AvailableAt: now.Add(time.Duration(i) * time.Minute),
+			}
+			jobID := pgwf.JobID(fmt.Sprintf("sort-job-%d", i))
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+				t.Fatalf("submit job %d: %v", i, err)
+			}
+		}
+
+		// Sort by created_at DESC
+		result1, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID:  string(testTenantID),
+			SortBy:    pgwf.SortByCreatedAt,
+			SortOrder: pgwf.SortDesc,
+			Limit:     100,
+		})
+		if err != nil {
+			t.Fatalf("list by created_at desc: %v", err)
+		}
+		// Verify descending order
+		for i := 1; i < len(result1.Jobs); i++ {
+			if result1.Jobs[i].CreatedAt.After(result1.Jobs[i-1].CreatedAt) {
+				t.Error("jobs not in descending created_at order")
+			}
+		}
+
+		// Sort by created_at ASC
+		result2, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID:  string(testTenantID),
+			SortBy:    pgwf.SortByCreatedAt,
+			SortOrder: pgwf.SortAsc,
+			Limit:     100,
+		})
+		if err != nil {
+			t.Fatalf("list by created_at asc: %v", err)
+		}
+		// Verify ascending order
+		for i := 1; i < len(result2.Jobs); i++ {
+			if result2.Jobs[i].CreatedAt.Before(result2.Jobs[i-1].CreatedAt) {
+				t.Error("jobs not in ascending created_at order")
+			}
+		}
+
+		// Sort by available_at DESC
+		result3, err := pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+			TenantID:  string(testTenantID),
+			SortBy:    pgwf.SortByAvailableAt,
+			SortOrder: pgwf.SortDesc,
+			Limit:     100,
+		})
+		if err != nil {
+			t.Fatalf("list by available_at desc: %v", err)
+		}
+		// Verify descending order
+		for i := 1; i < len(result3.Jobs); i++ {
+			if result3.Jobs[i].AvailableAt.After(result3.Jobs[i-1].AvailableAt) {
+				t.Error("jobs not in descending available_at order")
+			}
+		}
+	})
+}

@@ -9,6 +9,134 @@
 
 ## API overview
 
+### Query APIs
+
+pgwf-go provides a comprehensive set of read-only query APIs that eliminate the need to directly access underlying database tables.
+
+#### Job Status Query
+
+Check the status and metadata of a specific job without leasing it:
+
+```go
+func GetJobStatus(ctx context.Context, db pgwf.DB, tenantID pgwf.TenantID, jobID pgwf.JobID) (*pgwf.JobStatusInfo, error)
+```
+
+Returns detailed job information including status (READY, ACTIVE, CANCELLED, etc.), lease information, dependencies, and timing. Searches both active and archived jobs.
+
+#### Job Existence Check
+
+Verify if a job exists and optionally validate tenant ownership:
+
+```go
+func CheckJobExists(ctx context.Context, db pgwf.DB, tenantID pgwf.TenantID, jobID pgwf.JobID) (*pgwf.JobExistence, error)
+func CheckJobExistsWithTenant(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, expectedTenantID pgwf.TenantID) (*pgwf.JobExistence, error)
+```
+
+Useful for idempotency checks before submitting duplicate jobs.
+
+#### Get Job by ID
+
+Retrieve full job information without leasing:
+
+```go
+func GetJob(ctx context.Context, db pgwf.DB, tenantID pgwf.TenantID, jobID pgwf.JobID, opts pgwf.GetJobOptions) (*pgwf.JobDetail, error)
+```
+
+Set `opts.IncludePayload = true` to include the job payload (excluded by default for efficiency).
+
+#### Find Jobs by Criteria
+
+Find jobs matching specific criteria (useful for external task workers):
+
+```go
+func FindJobs(ctx context.Context, db pgwf.DB, opts pgwf.FindJobsOptions) ([]pgwf.JobInfo, error)
+```
+
+Example - find all READY jobs waiting for a specific capability across multiple tenants:
+
+```go
+jobs, err := pgwf.FindJobs(ctx, db, pgwf.FindJobsOptions{
+    TenantIDs: []string{"tenant-1", "tenant-2"},
+    Status:    pgwf.JobStatusReady,
+    NextNeed:  "workflow:emailTask",
+    Limit:     100,
+})
+```
+
+#### List Jobs with Filtering and Pagination
+
+Query jobs with advanced filtering and cursor-based pagination:
+
+```go
+func ListJobs(ctx context.Context, db pgwf.DB, opts pgwf.ListJobsOptions) (*pgwf.ListJobsResult, error)
+```
+
+**Features**:
+- **Multi-tenant filtering**: Query multiple tenants in a single call using `TenantIDs []string`
+- **Multi-pattern job type filtering**: Filter by multiple LIKE patterns using `JobTypePatterns []string` (OR semantics)
+- **Cursor-based pagination**: Stateless pagination using opaque cursor tokens
+- **Status filtering**: Filter by multiple job statuses
+- **Time range filtering**: Filter by creation time
+- **Sorting**: Sort by created_at, available_at, or job_id (ASC/DESC)
+- **Archive support**: Include archived jobs with `IncludeArchived: true`
+
+Example - paginated list with multiple filters:
+
+```go
+opts := pgwf.ListJobsOptions{
+    TenantIDs: []string{"tenant-1", "tenant-2"},  // Multi-tenant
+    Statuses:  []pgwf.JobStatus{pgwf.JobStatusReady, pgwf.JobStatusActive},
+    JobTypePatterns: []string{"workflow1:%", "workflow2:%", "batch:process"},  // Multi-pattern
+    Limit:     50,
+    SortBy:    pgwf.SortByCreatedAt,
+    SortOrder: pgwf.SortDesc,
+}
+
+for {
+    result, err := pgwf.ListJobs(ctx, db, opts)
+    if err != nil {
+        return err
+    }
+
+    for _, job := range result.Jobs {
+        // Process job
+    }
+
+    if !result.HasMore {
+        break
+    }
+    opts.Cursor = result.NextCursor  // Use cursor for next page
+}
+```
+
+**Cursor Pagination**: Cursors are opaque tokens that encode:
+- Last seen value of the sort field
+- Last seen job_id (for tie-breaking)
+- Query fingerprint (validates cursor matches current query parameters)
+
+Cursors are validated on each request and return `ErrInvalidCursor` if parameters change.
+
+#### Batch Status Query
+
+Check status of multiple jobs efficiently:
+
+```go
+func GetJobStatusBatch(ctx context.Context, db pgwf.DB, tenantID pgwf.TenantID, jobIDs []pgwf.JobID) (map[string]*pgwf.JobStatusInfo, error)
+```
+
+Returns a map of jobID → JobStatusInfo. Jobs that don't exist are omitted from results.
+
+#### Archive Query
+
+Check if a job is archived or query archived jobs specifically:
+
+```go
+func IsJobArchived(ctx context.Context, db pgwf.DB, tenantID pgwf.TenantID, jobID pgwf.JobID) (bool, error)
+func ListArchivedJobs(ctx context.Context, db pgwf.DB, opts pgwf.ListArchivedJobsOptions) (*pgwf.ListJobsResult, error)
+```
+
+`ListArchivedJobs` is more efficient than `ListJobs` when you only need completed jobs.
+
 ### Submission
 
 ```go
@@ -159,8 +287,27 @@ func handleEmail(ctx context.Context, jobID pgwf.JobID) error {
 }
 ```
 
+## Sentinel Errors
+
+The query APIs return specific sentinel errors for common failure cases:
+
+```go
+var (
+    ErrJobNotFound      error // Job doesn't exist in active or archived tables
+    ErrTenantMismatch   error // Job exists but belongs to different tenant
+    ErrInvalidCursor    error // Pagination cursor is invalid or doesn't match query
+    ErrInvalidOptions   error // Query options are invalid
+    ErrLeaseExpired     error // Lease has expired (lease APIs)
+    ErrLeaseMismatch    error // Lease ID mismatch (lease APIs)
+    ErrDependencyViolation error // Dependency constraint violation (submission)
+)
+```
+
+Use `errors.Is()` to check for these errors and handle appropriately.
+
 ## Getting started
 
 1. Apply or verify the schema (optional) by importing `github.com/colony-2/pgwf-go/installer` and calling `Installer.Apply` / `Installer.Verify`.
 2. Wire the `pkg/pgwf` helpers into your producer and worker processes.
-3. Watch for sentinel errors (`ErrLeaseExpired`, `ErrLeaseMismatch`, `ErrJobNotFound`, `ErrDependencyViolation`) to decide whether to retry, drop, or resubmit work.
+3. Use query APIs (`GetJobStatus`, `ListJobs`, etc.) to monitor and inspect jobs without directly accessing database tables.
+4. Watch for sentinel errors (`ErrLeaseExpired`, `ErrLeaseMismatch`, `ErrJobNotFound`, `ErrDependencyViolation`, `ErrInvalidCursor`) to decide whether to retry, drop, or resubmit work.
