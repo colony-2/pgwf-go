@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"runtime"
 	"strings"
 	"sync"
@@ -33,13 +34,30 @@ type DB interface {
 // JobDependencies define when/how a job becomes runnable.
 type JobDependencies struct {
 	NextNeed    Capability
+	Alternate   *AlternateNext
 	WaitFor     []JobID
 	AvailableAt time.Time
+}
+
+// AlternateNext describes an optional fallback capability.
+// When set, the job pivots to Need after the job has been READY for at least After.
+// Use an empty Need with zero After to explicitly clear an existing alternate on reschedule.
+type AlternateNext struct {
+	Need  Capability
+	After time.Duration
 }
 
 func (d JobDependencies) validate() error {
 	if d.NextNeed == "" {
 		return fmt.Errorf("next capability is required")
+	}
+	if d.Alternate != nil {
+		if d.Alternate.After < 0 {
+			return fmt.Errorf("alternate after must be non-negative")
+		}
+		if d.Alternate.Need == "" && d.Alternate.After > 0 {
+			return fmt.Errorf("alternate capability is required when after is set")
+		}
 	}
 	return nil
 }
@@ -60,6 +78,40 @@ func (d JobDependencies) waitForStrings() []string {
 
 func (d JobDependencies) availableAtArg() any {
 	return optionalTime(d.AvailableAt)
+}
+
+// alternateArgsForSubmit returns args for submit_job; nil values mean "no alternate".
+func (d JobDependencies) alternateArgsForSubmit() (any, any) {
+	if d.Alternate == nil {
+		return nil, nil
+	}
+	if d.Alternate.Need == "" && d.Alternate.After == 0 {
+		return nil, nil
+	}
+	return string(d.Alternate.Need), durationToSecondsArg(d.Alternate.After)
+}
+
+// alternateArgsForReschedule controls whether to overwrite/clear alternate fields.
+// set indicates p_set_alternate should be TRUE so the database applies the provided (possibly nil) values.
+func (d JobDependencies) alternateArgsForReschedule() (need any, after any, set bool) {
+	if d.Alternate == nil {
+		return nil, nil, false
+	}
+	if d.Alternate.Need == "" && d.Alternate.After == 0 {
+		return nil, nil, true // explicit clear
+	}
+	return string(d.Alternate.Need), durationToSecondsArg(d.Alternate.After), true
+}
+
+func durationToSecondsArg(d time.Duration) any {
+	if d < 0 {
+		return nil
+	}
+	secs := int(math.Ceil(d.Seconds()))
+	if secs < 0 {
+		secs = 0
+	}
+	return secs
 }
 
 func optionalTime(t time.Time) any {

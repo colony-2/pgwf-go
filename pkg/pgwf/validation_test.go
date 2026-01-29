@@ -22,6 +22,14 @@ func TestSubmitJobValidationErrors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	deps := JobDependencies{NextNeed: Capability("cap")}
+	depsWithInvalidAlternate := JobDependencies{
+		NextNeed:  Capability("cap"),
+		Alternate: &AlternateNext{Need: "", After: time.Second},
+	}
+	depsWithNegativeAlternate := JobDependencies{
+		NextNeed:  Capability("cap"),
+		Alternate: &AlternateNext{Need: "alt", After: -time.Second},
+	}
 	cases := []struct {
 		name     string
 		ctx      context.Context
@@ -37,6 +45,8 @@ func TestSubmitJobValidationErrors(t *testing.T) {
 		{name: "empty job", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "", worker: "w", deps: deps},
 		{name: "empty worker", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "", deps: deps},
 		{name: "missing capability", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "w", deps: JobDependencies{}},
+		{name: "alternate missing capability", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "w", deps: depsWithInvalidAlternate},
+		{name: "alternate negative delay", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "w", deps: depsWithNegativeAlternate},
 	}
 	for _, tc := range cases {
 		tc := tc

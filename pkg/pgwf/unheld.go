@@ -12,7 +12,7 @@ const (
 	completeUnheldStmt   = `SELECT pgwf.complete_unheld_job($1, $2, $3)`
 	rescheduleUnheldStmt = `
 SELECT job_id, next_need, wait_for, available_at
-FROM pgwf.reschedule_unheld_job($1, $2, $3, $4, $5, $6, $7)
+FROM pgwf.reschedule_unheld_job($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 `
 )
 
@@ -69,6 +69,7 @@ func RescheduleUnheldJob(ctx context.Context, db DB, tenantID TenantID, jobID Jo
 	if err != nil {
 		return err
 	}
+	altNeedArg, altAfterArg, altSet := deps.alternateArgsForReschedule()
 
 	row := db.QueryRowContext(ctx, rescheduleUnheldStmt,
 		string(tenantID),
@@ -78,6 +79,9 @@ func RescheduleUnheldJob(ctx context.Context, db DB, tenantID TenantID, jobID Jo
 		pq.Array(deps.waitForStrings()),
 		deps.availableAtArg(),
 		payloadArg,
+		altNeedArg,
+		altAfterArg,
+		altSet,
 	)
 
 	var (

@@ -12,7 +12,7 @@ import (
 
 const submitStmt = `
 SELECT job_id, next_need, wait_for, payload, available_at
-FROM pgwf.submit_job($1, $2, $3, $4, $5, $6, $7, $8, $9)
+FROM pgwf.submit_job($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 `
 
 // SubmitJob inserts workflow metadata using pgwf.submit_job.
@@ -40,6 +40,7 @@ func SubmitJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, deps 
 	if err != nil {
 		return err
 	}
+	altNeedArg, altAfterArg := deps.alternateArgsForSubmit()
 
 	row := db.QueryRowContext(ctx, submitStmt,
 		string(tenantID),
@@ -51,6 +52,8 @@ func SubmitJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, deps 
 		singletonArg(singletonKey),
 		deps.availableAtArg(),
 		expiresAtArg(expiresAt),
+		altNeedArg,
+		altAfterArg,
 	)
 
 	var (

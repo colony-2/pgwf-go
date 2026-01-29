@@ -147,6 +147,7 @@ func SubmitJob(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, deps pgwf.JobD
 - Accepts an immutable JSON payload (object, ≤512 bytes stored) that workers will receive on lease.
 - Optional `singletonKey` enforces one active job per key at submission time; pass `""` to skip.
 - Optional `expiresAt` sets `pgwf.jobs.expires_at`; leave zero to keep the job leaseable indefinitely.
+- Alternate capability fallback: set `deps.Alternate = &pgwf.AlternateNext{Need: "cap.alt", After: 5 * time.Minute}` to pivot to `cap.alt` once the job has been READY and unleased for 5 minutes. Use `Alternate = &pgwf.AlternateNext{}` in a reschedule to clear any existing alternate.
 - Accepts `*sql.DB` or `*sql.Tx`, enabling atomic submission alongside your own business tables.
 - Wraps dependency/singleton violations in `pgwf.ErrDependencyViolation`.
 

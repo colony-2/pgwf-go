@@ -14,7 +14,7 @@ const (
 	extendStmt     = `SELECT pgwf.extend_lease($1, $2, $3, $4, $5)`
 	rescheduleStmt = `
 SELECT job_id, next_need, wait_for, available_at
-FROM pgwf.reschedule_job($1, $2, $3, $4, $5, $6, $7, $8)
+FROM pgwf.reschedule_job($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 `
 	completeStmt = `SELECT pgwf.complete_job($1, $2, $3, $4)`
 )
@@ -88,6 +88,7 @@ func (l *Lease) Reschedule(ctx context.Context, db DB, deps JobDependencies, pay
 	if err != nil {
 		return err
 	}
+	altNeedArg, altAfterArg, altSet := deps.alternateArgsForReschedule()
 	row := db.QueryRowContext(ctx, rescheduleStmt,
 		string(l.tenantID),
 		string(l.jobID),
@@ -97,6 +98,9 @@ func (l *Lease) Reschedule(ctx context.Context, db DB, deps JobDependencies, pay
 		pq.Array(deps.waitForStrings()),
 		deps.availableAtArg(),
 		payloadArg,
+		altNeedArg,
+		altAfterArg,
+		altSet,
 	)
 
 	var (
