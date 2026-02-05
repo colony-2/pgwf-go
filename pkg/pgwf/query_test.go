@@ -3,6 +3,7 @@ package pgwf_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 
 	_ "github.com/lib/pq"
@@ -14,6 +15,16 @@ import (
 // For full integration tests, see installer/integration_test.go
 
 // NOTE: TestGetJobStatus_NotFound is now in installer/integration_test.go as part of comprehensive integration tests
+
+type stubDB struct{}
+
+func (stubDB) QueryRowContext(context.Context, string, ...any) *sql.Row {
+	panic("unexpected QueryRowContext call")
+}
+
+func (stubDB) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
+	panic("unexpected QueryContext call")
+}
 
 func TestCheckJobExists_Validation(t *testing.T) {
 	ctx := context.Background()
@@ -77,6 +88,40 @@ func TestFindJobsOptions_Validation(t *testing.T) {
 	})
 	if err == nil {
 		t.Errorf("expected error for missing next_need")
+	}
+}
+
+func TestListJobs_MetadataPredicateValidation(t *testing.T) {
+	ctx := context.Background()
+
+	_, err := pgwf.ListJobs(ctx, stubDB{}, pgwf.ListJobsOptions{
+		TenantID: "tenant-1",
+		MetadataEquals: []pgwf.MetadataPredicate{
+			{Path: nil, Values: []any{"x"}},
+		},
+	})
+	if err == nil || !errors.Is(err, pgwf.ErrInvalidOptions) {
+		t.Fatalf("expected invalid options error for empty path, got %v", err)
+	}
+
+	_, err = pgwf.ListJobs(ctx, stubDB{}, pgwf.ListJobsOptions{
+		TenantID: "tenant-1",
+		MetadataEquals: []pgwf.MetadataPredicate{
+			{Path: []string{"meta"}, Values: nil},
+		},
+	})
+	if err == nil || !errors.Is(err, pgwf.ErrInvalidOptions) {
+		t.Fatalf("expected invalid options error for missing values, got %v", err)
+	}
+
+	_, err = pgwf.ListJobs(ctx, stubDB{}, pgwf.ListJobsOptions{
+		TenantID: "tenant-1",
+		MetadataEquals: []pgwf.MetadataPredicate{
+			{Path: []string{"meta"}, Values: []any{nil}},
+		},
+	})
+	if err == nil || !errors.Is(err, pgwf.ErrInvalidOptions) {
+		t.Fatalf("expected invalid options error for nil in values, got %v", err)
 	}
 }
 

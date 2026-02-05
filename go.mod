@@ -8,6 +8,6 @@ require (
 )
 
 require (
-	github.com/colony-2/pgwf v0.0.0-20260129015659-c3b26410e213 // indirect
+	github.com/colony-2/pgwf v0.0.0-20260205023558-5abc9c8562fb // indirect
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 )

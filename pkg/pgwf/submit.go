@@ -12,12 +12,13 @@ import (
 
 const submitStmt = `
 SELECT job_id, next_need, wait_for, payload, available_at
-FROM pgwf.submit_job($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+FROM pgwf.submit_job($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 `
 
 // SubmitJob inserts workflow metadata using pgwf.submit_job.
+// metadata is optional; nil defaults to {} and is immutable after creation.
 // expiresAt is optional; zero value keeps the job leaseable indefinitely.
-func SubmitJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, deps JobDependencies, payload any, worker WorkerID, singletonKey string, expiresAt time.Time) error {
+func SubmitJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, deps JobDependencies, payload any, metadata any, worker WorkerID, singletonKey string, expiresAt time.Time) error {
 	if db == nil {
 		return fmt.Errorf("pgwf: nil DB")
 	}
@@ -40,6 +41,10 @@ func SubmitJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, deps 
 	if err != nil {
 		return err
 	}
+	metadataArg, err := normalizeMetadata(metadata)
+	if err != nil {
+		return err
+	}
 	altNeedArg, altAfterArg := deps.alternateArgsForSubmit()
 
 	row := db.QueryRowContext(ctx, submitStmt,
@@ -49,6 +54,7 @@ func SubmitJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, deps 
 		string(deps.NextNeed),
 		pq.Array(deps.waitForStrings()),
 		payloadArg,
+		metadataArg,
 		singletonArg(singletonKey),
 		deps.availableAtArg(),
 		expiresAtArg(expiresAt),
@@ -92,6 +98,13 @@ func normalizePayload(payload any) (json.RawMessage, error) {
 	return encodePayload(payload)
 }
 
+func normalizeMetadata(metadata any) (json.RawMessage, error) {
+	if metadata == nil {
+		return json.RawMessage(`{}`), nil
+	}
+	return encodeMetadata(metadata)
+}
+
 func normalizePayloadOverride(payload any) (json.RawMessage, error) {
 	if payload == nil {
 		return nil, nil
@@ -114,16 +127,39 @@ func encodePayload(payload any) (json.RawMessage, error) {
 	}
 }
 
+func encodeMetadata(metadata any) (json.RawMessage, error) {
+	switch v := metadata.(type) {
+	case json.RawMessage:
+		return ensureMetadataObject(v)
+	case []byte:
+		return ensureMetadataObject(json.RawMessage(v))
+	default:
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("pgwf: encoding metadata: %w", err)
+		}
+		return ensureMetadataObject(encoded)
+	}
+}
+
 func ensurePayloadObject(raw json.RawMessage) (json.RawMessage, error) {
+	return ensureJSONObject(raw, "payload")
+}
+
+func ensureMetadataObject(raw json.RawMessage) (json.RawMessage, error) {
+	return ensureJSONObject(raw, "metadata")
+}
+
+func ensureJSONObject(raw json.RawMessage, field string) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return json.RawMessage(`{}`), nil
 	}
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil {
-		return nil, fmt.Errorf("pgwf: payload must be a JSON object: %w", err)
+		return nil, fmt.Errorf("pgwf: %s must be a JSON object: %w", field, err)
 	}
 	if obj == nil {
-		return nil, fmt.Errorf("pgwf: payload must be a JSON object")
+		return nil, fmt.Errorf("pgwf: %s must be a JSON object", field)
 	}
 	return raw, nil
 }

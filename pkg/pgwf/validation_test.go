@@ -51,14 +51,14 @@ func TestSubmitJobValidationErrors(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			if err := SubmitJob(tc.ctx, tc.db, tc.tenantID, tc.jobID, tc.deps, nil, tc.worker, "", time.Time{}); err == nil {
+			if err := SubmitJob(tc.ctx, tc.db, tc.tenantID, tc.jobID, tc.deps, nil, nil, tc.worker, "", time.Time{}); err == nil {
 				t.Fatalf("expected error for %s", tc.name)
 			}
 		})
 	}
 
 	t.Run("payload not object", func(t *testing.T) {
-		if err := SubmitJob(ctx, stubDB{}, "tenant", "job", deps, []string{"not an object"}, "w", "", time.Time{}); err == nil {
+		if err := SubmitJob(ctx, stubDB{}, "tenant", "job", deps, []string{"not an object"}, nil, "w", "", time.Time{}); err == nil {
 			t.Fatalf("expected payload validation error")
 		}
 	})
