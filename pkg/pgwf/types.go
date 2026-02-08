@@ -239,7 +239,7 @@ func (l *Lease) markReleased() {
 	l.mu.Lock()
 	l.released = true
 	l.mu.Unlock()
-	l.stopKeepAlive()
+	l.StopKeepAlive()
 }
 
 func (l *Lease) updateExpiry(newExpiry time.Time) {
@@ -276,11 +276,11 @@ func (l *Lease) startKeepAlive(db *sql.DB) {
 
 	go l.keepAliveLoop(ctx)
 	runtime.SetFinalizer(l, func(le *Lease) {
-		le.stopKeepAlive()
+		le.StopKeepAlive()
 	})
 }
 
-func (l *Lease) stopKeepAlive() {
+func (l *Lease) StopKeepAlive() {
 	l.mu.Lock()
 	cancel := l.keepAliveCancel
 	done := l.keepAliveDone
