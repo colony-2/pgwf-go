@@ -16,7 +16,7 @@ const (
 SELECT job_id, next_need, wait_for, available_at
 FROM pgwf.reschedule_job($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 `
-	completeStmt = `SELECT pgwf.complete_job($1, $2, $3, $4)`
+	completeStmt = `SELECT pgwf.complete_job($1, $2, $3, $4, $5, $6)`
 )
 
 // WithKeepAlive spawns a goroutine that periodically extends the lease until released.
@@ -118,10 +118,32 @@ func (l *Lease) Reschedule(ctx context.Context, db DB, deps JobDependencies, pay
 
 // Complete archives the job and removes the lease.
 func (l *Lease) Complete(ctx context.Context, db DB) error {
+	return l.completeWithStatus(ctx, db, CompletionStatusSucceeded, "")
+}
+
+// CompleteWithStatus archives the job with an explicit completion status and optional failure detail.
+func (l *Lease) CompleteWithStatus(ctx context.Context, db DB, status CompletionStatus, failureDetail string) error {
+	return l.completeWithStatus(ctx, db, status, failureDetail)
+}
+
+func (l *Lease) completeWithStatus(ctx context.Context, db DB, status CompletionStatus, failureDetail string) error {
 	if err := l.validateActive(); err != nil {
 		return err
 	}
-	row := db.QueryRowContext(ctx, completeStmt, string(l.tenantID), string(l.jobID), l.leaseID, string(l.worker))
+	completionStatus, failureArg, err := normalizeCompletion(status, failureDetail)
+	if err != nil {
+		return err
+	}
+	row := db.QueryRowContext(
+		ctx,
+		completeStmt,
+		string(l.tenantID),
+		string(l.jobID),
+		l.leaseID,
+		string(l.worker),
+		string(completionStatus),
+		failureArg,
+	)
 	var ok bool
 	if err := row.Scan(&ok); err != nil {
 		return annotateError(err)

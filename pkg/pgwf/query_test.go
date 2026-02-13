@@ -65,6 +65,15 @@ func TestListJobsOptions_DefaultsAndLimits(t *testing.T) {
 		t.Errorf("expected error for missing tenant_id")
 	}
 
+	// Test completion status requires include archived
+	_, err = pgwf.ListJobs(ctx, db, pgwf.ListJobsOptions{
+		TenantID:           "test",
+		CompletionStatuses: []pgwf.CompletionStatus{pgwf.CompletionStatusSucceeded},
+	})
+	if err == nil || !errors.Is(err, pgwf.ErrInvalidOptions) {
+		t.Errorf("expected invalid options error for completion status without include archived, got %v", err)
+	}
+
 	// Test nil context
 	_, err = pgwf.ListJobs(nil, db, pgwf.ListJobsOptions{TenantID: "test"})
 	if err == nil || err.Error() != "pgwf: nil context" {
@@ -171,6 +180,7 @@ func TestJobStatusConstants(t *testing.T) {
 		pgwf.JobStatusCrashConcern,
 		pgwf.JobStatusExpired,
 		pgwf.JobStatusReady,
+		pgwf.JobStatusCompleted,
 	}
 
 	expectedValues := []string{
@@ -181,6 +191,7 @@ func TestJobStatusConstants(t *testing.T) {
 		"CRASH_CONCERN",
 		"EXPIRED",
 		"READY",
+		"COMPLETED",
 	}
 
 	for i, status := range statuses {

@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	completeUnheldStmt   = `SELECT pgwf.complete_unheld_job($1, $2, $3)`
+	completeUnheldStmt   = `SELECT pgwf.complete_unheld_job($1, $2, $3, $4, $5)`
 	rescheduleUnheldStmt = `
 SELECT job_id, next_need, wait_for, available_at
 FROM pgwf.reschedule_unheld_job($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -18,6 +18,11 @@ FROM pgwf.reschedule_unheld_job($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 
 // CompleteUnheldJob finalizes a job without requiring a lease by locking it directly.
 func CompleteUnheldJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, worker WorkerID) error {
+	return CompleteUnheldJobWithStatus(ctx, db, tenantID, jobID, worker, CompletionStatusSucceeded, "")
+}
+
+// CompleteUnheldJobWithStatus finalizes a job without requiring a lease by locking it directly.
+func CompleteUnheldJobWithStatus(ctx context.Context, db DB, tenantID TenantID, jobID JobID, worker WorkerID, status CompletionStatus, failureDetail string) error {
 	if db == nil {
 		return fmt.Errorf("pgwf: nil DB")
 	}
@@ -34,7 +39,19 @@ func CompleteUnheldJob(ctx context.Context, db DB, tenantID TenantID, jobID JobI
 		return fmt.Errorf("pgwf: worker id is required")
 	}
 
-	row := db.QueryRowContext(ctx, completeUnheldStmt, string(tenantID), string(jobID), string(worker))
+	completionStatus, failureArg, err := normalizeCompletion(status, failureDetail)
+	if err != nil {
+		return err
+	}
+	row := db.QueryRowContext(
+		ctx,
+		completeUnheldStmt,
+		string(tenantID),
+		string(jobID),
+		string(worker),
+		string(completionStatus),
+		failureArg,
+	)
 	var ok bool
 	if err := row.Scan(&ok); err != nil {
 		return annotateError(err)
