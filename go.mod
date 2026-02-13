@@ -3,11 +3,9 @@ module github.com/colony-2/pgwf-go
 go 1.24.1
 
 require (
+	github.com/colony-2/pgwf v0.0.0-20260213034729-261a13e32396
 	github.com/fergusstrange/embedded-postgres v1.32.0
 	github.com/lib/pq v1.10.9
 )
 
-require (
-	github.com/colony-2/pgwf v0.0.0-20260213030727-26e3e9432e02 // indirect
-	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
-)
+require github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect

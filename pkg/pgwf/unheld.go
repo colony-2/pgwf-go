@@ -22,7 +22,7 @@ func CompleteUnheldJob(ctx context.Context, db DB, tenantID TenantID, jobID JobI
 }
 
 // CompleteUnheldJobWithStatus finalizes a job without requiring a lease by locking it directly.
-func CompleteUnheldJobWithStatus(ctx context.Context, db DB, tenantID TenantID, jobID JobID, worker WorkerID, status CompletionStatus, failureDetail string) error {
+func CompleteUnheldJobWithStatus(ctx context.Context, db DB, tenantID TenantID, jobID JobID, worker WorkerID, status CompletionStatus, completionDetail string) error {
 	if db == nil {
 		return fmt.Errorf("pgwf: nil DB")
 	}
@@ -39,10 +39,7 @@ func CompleteUnheldJobWithStatus(ctx context.Context, db DB, tenantID TenantID, 
 		return fmt.Errorf("pgwf: worker id is required")
 	}
 
-	completionStatus, failureArg, err := normalizeCompletion(status, failureDetail)
-	if err != nil {
-		return err
-	}
+	completionStatus, completionArg := normalizeCompletion(status, completionDetail)
 	row := db.QueryRowContext(
 		ctx,
 		completeUnheldStmt,
@@ -50,7 +47,7 @@ func CompleteUnheldJobWithStatus(ctx context.Context, db DB, tenantID TenantID, 
 		string(jobID),
 		string(worker),
 		string(completionStatus),
-		failureArg,
+		completionArg,
 	)
 	var ok bool
 	if err := row.Scan(&ok); err != nil {

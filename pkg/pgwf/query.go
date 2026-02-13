@@ -50,7 +50,7 @@ type JobStatusInfo struct {
 	ArchivedAt  *time.Time // Only populated if job is archived
 	// Completion (archived jobs only)
 	CompletionStatus *CompletionStatus
-	FailureDetail    *string
+	CompletionDetail *string
 
 	// Lease information
 	LeaseID                *string
@@ -85,7 +85,7 @@ type JobListItem struct {
 	CreatedAt              time.Time
 	ArchivedAt             *time.Time
 	CompletionStatus       *CompletionStatus
-	FailureDetail          *string
+	CompletionDetail       *string
 	LeaseID                *string
 	LeaseExpiresAt         *time.Time // nil if '-infinity'
 	LeaseExpirationCount   int64
@@ -201,7 +201,7 @@ type JobDetail struct {
 	CreatedAt              time.Time
 	ArchivedAt             *time.Time // Only populated if querying archive
 	CompletionStatus       *CompletionStatus
-	FailureDetail          *string
+	CompletionDetail       *string
 	LeaseID                *string
 	LeaseExpiresAt         *time.Time // nil if '-infinity'
 	LeaseExpirationCount   int64
@@ -259,7 +259,7 @@ func GetJobStatus(ctx context.Context, db DB, tenantID TenantID, jobID JobID) (*
 			created_at,
 			NULL as archived_at,
 			NULL as completion_status,
-			NULL as failure_detail,
+			NULL as completion_detail,
 			lease_id,
 			CASE WHEN lease_expires_at = '-infinity' THEN NULL ELSE lease_expires_at END,
 			lease_expiration_count, consecutive_expirations,
@@ -282,7 +282,7 @@ func GetJobStatus(ctx context.Context, db DB, tenantID TenantID, jobID JobID) (*
 			tenant_id, job_id, next_need, wait_for, singleton_key, payload, metadata,
 			CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 			created_at, archived_at,
-			completion_status, failure_detail,
+			completion_status, completion_detail,
 			lease_id, lease_expiration_count, consecutive_expirations,
 			cancel_requested, cancel_requested_by, cancel_requested_at
 		FROM pgwf.jobs_archive
@@ -308,7 +308,7 @@ func scanJobStatusInfo(row *sql.Row) (*JobStatusInfo, error) {
 	var singletonKey sql.NullString
 	var archivedAt sql.NullTime
 	var completionStatus sql.NullString
-	var failureDetail sql.NullString
+	var completionDetail sql.NullString
 	var expiresAt sql.NullTime
 	var leaseID sql.NullString
 	var leaseExpiresAt sql.NullTime
@@ -329,7 +329,7 @@ func scanJobStatusInfo(row *sql.Row) (*JobStatusInfo, error) {
 		&info.CreatedAt,
 		&archivedAt,
 		&completionStatus,
-		&failureDetail,
+		&completionDetail,
 		&leaseID,
 		&leaseExpiresAt,
 		&info.LeaseExpirationCount,
@@ -357,8 +357,8 @@ func scanJobStatusInfo(row *sql.Row) (*JobStatusInfo, error) {
 		cs := CompletionStatus(completionStatus.String)
 		info.CompletionStatus = &cs
 	}
-	if failureDetail.Valid {
-		info.FailureDetail = &failureDetail.String
+	if completionDetail.Valid {
+		info.CompletionDetail = &completionDetail.String
 	}
 	if leaseID.Valid {
 		info.LeaseID = &leaseID.String
@@ -384,7 +384,7 @@ func scanJobStatusInfoArchive(row *sql.Row) (*JobStatusInfo, error) {
 	var expiresAt sql.NullTime
 	var archivedAt sql.NullTime
 	var completionStatus sql.NullString
-	var failureDetail sql.NullString
+	var completionDetail sql.NullString
 	var leaseID sql.NullString
 	var cancelRequestedBy sql.NullString
 	var cancelRequestedAt sql.NullTime
@@ -401,7 +401,7 @@ func scanJobStatusInfoArchive(row *sql.Row) (*JobStatusInfo, error) {
 		&info.CreatedAt,
 		&archivedAt,
 		&completionStatus,
-		&failureDetail,
+		&completionDetail,
 		&leaseID,
 		&info.LeaseExpirationCount,
 		&info.ConsecutiveExpirations,
@@ -437,8 +437,8 @@ func scanJobStatusInfoArchive(row *sql.Row) (*JobStatusInfo, error) {
 	if archivedAt.Valid {
 		info.ArchivedAt = &archivedAt.Time
 	}
-	if failureDetail.Valid {
-		info.FailureDetail = &failureDetail.String
+	if completionDetail.Valid {
+		info.CompletionDetail = &completionDetail.String
 	}
 	if leaseID.Valid {
 		info.LeaseID = &leaseID.String
@@ -565,7 +565,7 @@ func GetJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, opts Get
 			created_at,
 			NULL as archived_at,
 			NULL as completion_status,
-			NULL as failure_detail,
+			NULL as completion_detail,
 			lease_id,
 			CASE WHEN lease_expires_at = '-infinity' THEN NULL ELSE lease_expires_at END,
 			lease_expiration_count, consecutive_expirations,
@@ -588,7 +588,7 @@ func GetJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, opts Get
 			tenant_id, job_id, next_need, wait_for, singleton_key, %s, metadata,
 			CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 			created_at, archived_at,
-			completion_status, failure_detail,
+			completion_status, completion_detail,
 			lease_id, lease_expiration_count, consecutive_expirations,
 			cancel_requested, cancel_requested_by, cancel_requested_at
 		FROM pgwf.jobs_archive
@@ -617,7 +617,7 @@ func scanJobDetail(row *sql.Row) (*JobDetail, error) {
 	var expiresAt sql.NullTime
 	var archivedAt sql.NullTime
 	var completionStatus sql.NullString
-	var failureDetail sql.NullString
+	var completionDetail sql.NullString
 	var leaseID sql.NullString
 	var leaseExpiresAt sql.NullTime
 	var cancelRequestedBy sql.NullString
@@ -637,7 +637,7 @@ func scanJobDetail(row *sql.Row) (*JobDetail, error) {
 		&detail.CreatedAt,
 		&archivedAt,
 		&completionStatus,
-		&failureDetail,
+		&completionDetail,
 		&leaseID,
 		&leaseExpiresAt,
 		&detail.LeaseExpirationCount,
@@ -669,8 +669,8 @@ func scanJobDetail(row *sql.Row) (*JobDetail, error) {
 		cs := CompletionStatus(completionStatus.String)
 		detail.CompletionStatus = &cs
 	}
-	if failureDetail.Valid {
-		detail.FailureDetail = &failureDetail.String
+	if completionDetail.Valid {
+		detail.CompletionDetail = &completionDetail.String
 	}
 	if leaseID.Valid {
 		detail.LeaseID = &leaseID.String
@@ -698,7 +698,7 @@ func scanJobDetailArchive(row *sql.Row) (*JobDetail, error) {
 	var expiresAt sql.NullTime
 	var archivedAt sql.NullTime
 	var completionStatus sql.NullString
-	var failureDetail sql.NullString
+	var completionDetail sql.NullString
 	var leaseID sql.NullString
 	var cancelRequestedBy sql.NullString
 	var cancelRequestedAt sql.NullTime
@@ -715,7 +715,7 @@ func scanJobDetailArchive(row *sql.Row) (*JobDetail, error) {
 		&detail.CreatedAt,
 		&archivedAt,
 		&completionStatus,
-		&failureDetail,
+		&completionDetail,
 		&leaseID,
 		&detail.LeaseExpirationCount,
 		&detail.ConsecutiveExpirations,
@@ -755,8 +755,8 @@ func scanJobDetailArchive(row *sql.Row) (*JobDetail, error) {
 	if archivedAt.Valid {
 		detail.ArchivedAt = &archivedAt.Time
 	}
-	if failureDetail.Valid {
-		detail.FailureDetail = &failureDetail.String
+	if completionDetail.Valid {
+		detail.CompletionDetail = &completionDetail.String
 	}
 	if leaseID.Valid {
 		detail.LeaseID = &leaseID.String
@@ -971,7 +971,7 @@ func GetJobStatusBatch(ctx context.Context, db DB, tenantID TenantID, jobIDs []J
 			created_at,
 			NULL as archived_at,
 			NULL as completion_status,
-			NULL as failure_detail,
+			NULL as completion_detail,
 			lease_id,
 			CASE WHEN lease_expires_at = '-infinity' THEN NULL ELSE lease_expires_at END,
 			lease_expiration_count, consecutive_expirations,
@@ -1006,7 +1006,7 @@ func GetJobStatusBatch(ctx context.Context, db DB, tenantID TenantID, jobIDs []J
 			tenant_id, job_id, next_need, wait_for, singleton_key, payload, metadata,
 			CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 			created_at, archived_at,
-			completion_status, failure_detail,
+			completion_status, completion_detail,
 			lease_id, lease_expiration_count, consecutive_expirations,
 			cancel_requested, cancel_requested_by, cancel_requested_at
 		FROM pgwf.jobs_archive
@@ -1046,7 +1046,7 @@ func scanJobStatusInfoRows(rows interface{ Scan(...interface{}) error }) (*JobSt
 	var expiresAt sql.NullTime
 	var archivedAt sql.NullTime
 	var completionStatus sql.NullString
-	var failureDetail sql.NullString
+	var completionDetail sql.NullString
 	var leaseID sql.NullString
 	var leaseExpiresAt sql.NullTime
 	var cancelRequestedBy sql.NullString
@@ -1066,7 +1066,7 @@ func scanJobStatusInfoRows(rows interface{ Scan(...interface{}) error }) (*JobSt
 		&info.CreatedAt,
 		&archivedAt,
 		&completionStatus,
-		&failureDetail,
+		&completionDetail,
 		&leaseID,
 		&leaseExpiresAt,
 		&info.LeaseExpirationCount,
@@ -1094,8 +1094,8 @@ func scanJobStatusInfoRows(rows interface{ Scan(...interface{}) error }) (*JobSt
 		cs := CompletionStatus(completionStatus.String)
 		info.CompletionStatus = &cs
 	}
-	if failureDetail.Valid {
-		info.FailureDetail = &failureDetail.String
+	if completionDetail.Valid {
+		info.CompletionDetail = &completionDetail.String
 	}
 	if leaseID.Valid {
 		info.LeaseID = &leaseID.String
@@ -1121,7 +1121,7 @@ func scanJobStatusInfoArchiveRows(rows interface{ Scan(...interface{}) error }) 
 	var expiresAt sql.NullTime
 	var archivedAt sql.NullTime
 	var completionStatus sql.NullString
-	var failureDetail sql.NullString
+	var completionDetail sql.NullString
 	var leaseID sql.NullString
 	var cancelRequestedBy sql.NullString
 	var cancelRequestedAt sql.NullTime
@@ -1138,7 +1138,7 @@ func scanJobStatusInfoArchiveRows(rows interface{ Scan(...interface{}) error }) 
 		&info.CreatedAt,
 		&archivedAt,
 		&completionStatus,
-		&failureDetail,
+		&completionDetail,
 		&leaseID,
 		&info.LeaseExpirationCount,
 		&info.ConsecutiveExpirations,
@@ -1174,8 +1174,8 @@ func scanJobStatusInfoArchiveRows(rows interface{ Scan(...interface{}) error }) 
 	if archivedAt.Valid {
 		info.ArchivedAt = &archivedAt.Time
 	}
-	if failureDetail.Valid {
-		info.FailureDetail = &failureDetail.String
+	if completionDetail.Valid {
+		info.CompletionDetail = &completionDetail.String
 	}
 	if leaseID.Valid {
 		info.LeaseID = &leaseID.String
@@ -1388,20 +1388,18 @@ func hashListJobsOptions(opts ListJobsOptions) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-func normalizeCompletionStatuses(statuses []CompletionStatus) ([]string, error) {
+func normalizeCompletionStatuses(statuses []CompletionStatus) []string {
 	if len(statuses) == 0 {
-		return nil, nil
+		return nil
 	}
 	out := make([]string, 0, len(statuses))
 	for _, status := range statuses {
-		switch status {
-		case CompletionStatusSucceeded, CompletionStatusFailed, CompletionStatusCancelled:
-			out = append(out, string(status))
-		default:
-			return nil, wrap(ErrInvalidOptions, fmt.Errorf("completion status must be succeeded, failed, or cancelled"))
+		if status == "" {
+			continue
 		}
+		out = append(out, string(status))
 	}
-	return out, nil
+	return out
 }
 
 // buildCursorCondition builds a WHERE clause condition for cursor-based pagination
@@ -1521,10 +1519,7 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 	if err != nil {
 		return nil, err
 	}
-	completionStatusStrings, err := normalizeCompletionStatuses(opts.CompletionStatuses)
-	if err != nil {
-		return nil, err
-	}
+	completionStatusStrings := normalizeCompletionStatuses(opts.CompletionStatuses)
 
 	// Decode cursor if present
 	cursor, err := decodeCursor(opts.Cursor, opts)
@@ -1635,7 +1630,7 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 				created_at,
 				NULL as archived_at,
 				NULL as completion_status,
-				NULL as failure_detail,
+				NULL as completion_detail,
 				lease_id,
 				CASE WHEN lease_expires_at = '-infinity' THEN NULL ELSE lease_expires_at END,
 				lease_expiration_count, consecutive_expirations,
@@ -1651,7 +1646,7 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 				CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 				created_at,
 				archived_at,
-				completion_status, failure_detail,
+				completion_status, completion_detail,
 				lease_id,
 				NULL as lease_expires_at,
 				lease_expiration_count, consecutive_expirations,
@@ -1672,7 +1667,7 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 				created_at,
 				NULL as archived_at,
 				NULL as completion_status,
-				NULL as failure_detail,
+				NULL as completion_detail,
 				lease_id,
 				CASE WHEN lease_expires_at = '-infinity' THEN NULL ELSE lease_expires_at END,
 				lease_expiration_count, consecutive_expirations,
@@ -1739,7 +1734,7 @@ func scanJobListItem(rows interface{ Scan(...interface{}) error }) (*JobListItem
 	var expiresAt sql.NullTime
 	var archivedAt sql.NullTime
 	var completionStatus sql.NullString
-	var failureDetail sql.NullString
+	var completionDetail sql.NullString
 	var leaseID sql.NullString
 	var leaseExpiresAt sql.NullTime
 	var cancelRequestedBy sql.NullString
@@ -1758,7 +1753,7 @@ func scanJobListItem(rows interface{ Scan(...interface{}) error }) (*JobListItem
 		&job.CreatedAt,
 		&archivedAt,
 		&completionStatus,
-		&failureDetail,
+		&completionDetail,
 		&leaseID,
 		&leaseExpiresAt,
 		&job.LeaseExpirationCount,
@@ -1787,8 +1782,8 @@ func scanJobListItem(rows interface{ Scan(...interface{}) error }) (*JobListItem
 		cs := CompletionStatus(completionStatus.String)
 		job.CompletionStatus = &cs
 	}
-	if failureDetail.Valid {
-		job.FailureDetail = &failureDetail.String
+	if completionDetail.Valid {
+		job.CompletionDetail = &completionDetail.String
 	}
 	if leaseID.Valid {
 		job.LeaseID = &leaseID.String
@@ -1827,10 +1822,7 @@ func ListArchivedJobs(ctx context.Context, db DB, opts ListArchivedJobsOptions) 
 		limit = 1000
 	}
 
-	completionStatusStrings, err := normalizeCompletionStatuses(opts.CompletionStatuses)
-	if err != nil {
-		return nil, err
-	}
+	completionStatusStrings := normalizeCompletionStatuses(opts.CompletionStatuses)
 
 	// Build WHERE clause
 	var conditions []string
@@ -1882,7 +1874,7 @@ func ListArchivedJobs(ctx context.Context, db DB, opts ListArchivedJobsOptions) 
 			created_at as available_at,
 			CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 			created_at, archived_at,
-			completion_status, failure_detail,
+			completion_status, completion_detail,
 			lease_id, lease_expiration_count, consecutive_expirations,
 			cancel_requested, cancel_requested_by, cancel_requested_at
 		FROM pgwf.jobs_archive
@@ -1939,7 +1931,7 @@ func scanJobListItemArchive(rows interface{ Scan(...interface{}) error }) (*JobL
 	var metadata json.RawMessage
 	var expiresAt sql.NullTime
 	var completionStatus sql.NullString
-	var failureDetail sql.NullString
+	var completionDetail sql.NullString
 	var leaseID sql.NullString
 	var cancelRequestedBy sql.NullString
 	var cancelRequestedAt sql.NullTime
@@ -1957,7 +1949,7 @@ func scanJobListItemArchive(rows interface{ Scan(...interface{}) error }) (*JobL
 		&job.CreatedAt,
 		&job.ArchivedAt,
 		&completionStatus,
-		&failureDetail,
+		&completionDetail,
 		&leaseID,
 		&job.LeaseExpirationCount,
 		&job.ConsecutiveExpirations,
@@ -1985,8 +1977,8 @@ func scanJobListItemArchive(rows interface{ Scan(...interface{}) error }) (*JobL
 		cs := CompletionStatus(completionStatus.String)
 		job.CompletionStatus = &cs
 	}
-	if failureDetail.Valid {
-		job.FailureDetail = &failureDetail.String
+	if completionDetail.Valid {
+		job.CompletionDetail = &completionDetail.String
 	}
 	if cancelRequestedBy.Valid {
 		job.CancelRequestedBy = &cancelRequestedBy.String

@@ -1,8 +1,7 @@
 package pgwf
 
-import "fmt"
-
 // CompletionStatus represents the outcome stored in pgwf.jobs_archive.
+// Values are arbitrary, but empty defaults to "succeeded" when completing jobs.
 type CompletionStatus string
 
 const (
@@ -11,20 +10,12 @@ const (
 	CompletionStatusCancelled CompletionStatus = "cancelled"
 )
 
-func normalizeCompletion(status CompletionStatus, failureDetail string) (CompletionStatus, any, error) {
+func normalizeCompletion(status CompletionStatus, completionDetail string) (CompletionStatus, any) {
 	if status == "" {
 		status = CompletionStatusSucceeded
 	}
-	switch status {
-	case CompletionStatusSucceeded, CompletionStatusFailed:
-	default:
-		return "", nil, fmt.Errorf("pgwf: completion status must be succeeded or failed")
+	if completionDetail == "" {
+		return status, nil
 	}
-	if failureDetail != "" && status != CompletionStatusFailed {
-		return "", nil, fmt.Errorf("pgwf: failure detail is only allowed when completion status is failed")
-	}
-	if failureDetail == "" {
-		return status, nil, nil
-	}
-	return status, failureDetail, nil
+	return status, completionDetail
 }

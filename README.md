@@ -175,20 +175,20 @@ func (l *pgwf.Lease) WithKeepAlive(db *sql.DB) *pgwf.Lease
 func (l *pgwf.Lease) Extend(ctx context.Context, db pgwf.DB, additional time.Duration) error
 func (l *pgwf.Lease) Reschedule(ctx context.Context, db pgwf.DB, deps pgwf.JobDependencies, payload any) error
 func (l *pgwf.Lease) Complete(ctx context.Context, db pgwf.DB) error
-func (l *pgwf.Lease) CompleteWithStatus(ctx context.Context, db pgwf.DB, status pgwf.CompletionStatus, failureDetail string) error
+func (l *pgwf.Lease) CompleteWithStatus(ctx context.Context, db pgwf.DB, status pgwf.CompletionStatus, completionDetail string) error
 ```
 
 - Each method verifies the lease is present, unreleased, and unexpired before reaching the database and returns `pgwf.ErrLeaseExpired` immediately if not.
 - `WithKeepAlive` spins up an internal goroutine (using a real `*sql.DB`) that refreshes the lease until you complete or reschedule it.
 - `Reschedule` optionally replaces the payload while updating dependencies; pass `nil` to leave the current payload intact.
-- `Complete` defaults to `pgwf.CompletionStatusSucceeded`. Use `CompleteWithStatus` to record `pgwf.CompletionStatusFailed` and optional failure details (failure details are only valid for failed completions).
+- `Complete` defaults to `pgwf.CompletionStatusSucceeded`. Use `CompleteWithStatus` to record an explicit completion status and optional completion detail.
 - Error helpers wrap driver errors in sentinel `pgwf.ErrLeaseMismatch`, `pgwf.ErrJobNotFound`, or `pgwf.ErrDependencyViolation` values for easier inspection.
 
 ### Unheld job helpers
 
 ```go
 func pgwf.CompleteUnheldJob(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, worker pgwf.WorkerID) error
-func pgwf.CompleteUnheldJobWithStatus(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, worker pgwf.WorkerID, status pgwf.CompletionStatus, failureDetail string) error
+func pgwf.CompleteUnheldJobWithStatus(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, worker pgwf.WorkerID, status pgwf.CompletionStatus, completionDetail string) error
 func pgwf.RescheduleUnheldJob(ctx context.Context, db pgwf.DB, jobID pgwf.JobID, worker pgwf.WorkerID, deps pgwf.JobDependencies, payload any) error
 ```
 

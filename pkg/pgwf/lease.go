@@ -122,18 +122,15 @@ func (l *Lease) Complete(ctx context.Context, db DB) error {
 }
 
 // CompleteWithStatus archives the job with an explicit completion status and optional failure detail.
-func (l *Lease) CompleteWithStatus(ctx context.Context, db DB, status CompletionStatus, failureDetail string) error {
-	return l.completeWithStatus(ctx, db, status, failureDetail)
+func (l *Lease) CompleteWithStatus(ctx context.Context, db DB, status CompletionStatus, completionDetail string) error {
+	return l.completeWithStatus(ctx, db, status, completionDetail)
 }
 
-func (l *Lease) completeWithStatus(ctx context.Context, db DB, status CompletionStatus, failureDetail string) error {
+func (l *Lease) completeWithStatus(ctx context.Context, db DB, status CompletionStatus, completionDetail string) error {
 	if err := l.validateActive(); err != nil {
 		return err
 	}
-	completionStatus, failureArg, err := normalizeCompletion(status, failureDetail)
-	if err != nil {
-		return err
-	}
+	completionStatus, completionArg := normalizeCompletion(status, completionDetail)
 	row := db.QueryRowContext(
 		ctx,
 		completeStmt,
@@ -142,7 +139,7 @@ func (l *Lease) completeWithStatus(ctx context.Context, db DB, status Completion
 		l.leaseID,
 		string(l.worker),
 		string(completionStatus),
-		failureArg,
+		completionArg,
 	)
 	var ok bool
 	if err := row.Scan(&ok); err != nil {
