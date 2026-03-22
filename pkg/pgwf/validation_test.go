@@ -89,6 +89,35 @@ func TestGetWorkValidationErrors(t *testing.T) {
 	}
 }
 
+func TestGetJobLeaseValidationErrors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cases := []struct {
+		name     string
+		ctx      context.Context
+		db       DB
+		tenantID TenantID
+		jobID    JobID
+		worker   WorkerID
+		caps     []Capability
+	}{
+		{name: "nil db", ctx: ctx, db: nil, tenantID: "tenant", jobID: "job", worker: "w", caps: []Capability{"cap"}},
+		{name: "nil ctx", ctx: nil, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "w", caps: []Capability{"cap"}},
+		{name: "empty tenant", ctx: ctx, db: stubDB{}, tenantID: "", jobID: "job", worker: "w", caps: []Capability{"cap"}},
+		{name: "empty job", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "", worker: "w", caps: []Capability{"cap"}},
+		{name: "empty worker", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "", caps: []Capability{"cap"}},
+		{name: "no caps", ctx: ctx, db: stubDB{}, tenantID: "tenant", jobID: "job", worker: "w", caps: nil},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := GetJobLease(tc.ctx, tc.db, tc.tenantID, tc.jobID, tc.worker, tc.caps); err == nil {
+				t.Fatalf("expected error for %s", tc.name)
+			}
+		})
+	}
+}
+
 func TestGetWorkWithOptionsValidationErrors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -113,6 +142,12 @@ func TestGetWorkWithOptionsValidationErrors(t *testing.T) {
 		},
 	}); err == nil {
 		t.Fatalf("expected metadata string-only validation error")
+	}
+
+	if _, err := GetJobLeaseWithOptions(ctx, stubDB{}, "tenant", "job", "w", []Capability{"cap"}, GetJobLeaseOptions{
+		LeaseSeconds: -1,
+	}); err == nil {
+		t.Fatalf("expected get job lease lease seconds validation error")
 	}
 }
 

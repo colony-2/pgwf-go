@@ -138,6 +138,112 @@ func TestGetWorkWithMetadataEquals(t *testing.T) {
 	})
 }
 
+func TestGetJobLease(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("targeted")}
+		for _, jobID := range []pgwf.JobID{"job-older", "job-target"} {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+				t.Fatalf("submit %s: %v", jobID, err)
+			}
+		}
+
+		lease, err := pgwf.GetJobLeaseWithOptions(
+			ctx,
+			db,
+			testTenantID,
+			pgwf.JobID("job-target"),
+			pgwf.WorkerID("worker-target"),
+			[]pgwf.Capability{"targeted"},
+			pgwf.GetJobLeaseOptions{LeaseSeconds: 5},
+		)
+		if err != nil {
+			t.Fatalf("get job lease: %v", err)
+		}
+		if lease == nil {
+			t.Fatalf("expected lease")
+		}
+		if lease.JobID() != pgwf.JobID("job-target") {
+			t.Fatalf("expected job-target, got %s", lease.JobID())
+		}
+		if lease.LeaseExpiry().Before(time.Now()) || lease.LeaseExpiry().After(time.Now().Add(8*time.Second)) {
+			t.Fatalf("expected lease expiry to honor custom lease seconds, got %v", lease.LeaseExpiry())
+		}
+
+		olderLease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-next"), []pgwf.Capability{"targeted"}, nil)
+		if err != nil {
+			t.Fatalf("get remaining work: %v", err)
+		}
+		if olderLease == nil {
+			t.Fatalf("expected older job to remain available")
+		}
+		if olderLease.JobID() != pgwf.JobID("job-older") {
+			t.Fatalf("expected job-older, got %s", olderLease.JobID())
+		}
+	})
+}
+
+func TestGetJobLeaseReturnsNilWhenUnavailable(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("targeted")}
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-target"), deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+
+		lease, err := pgwf.GetJobLease(ctx, db, testTenantID, pgwf.JobID("job-target"), pgwf.WorkerID("worker-target"), []pgwf.Capability{"other"})
+		if err != nil {
+			t.Fatalf("get job lease with mismatched capability: %v", err)
+		}
+		if lease != nil {
+			t.Fatalf("expected nil lease for mismatched capability, got %s", lease.JobID())
+		}
+	})
+}
+
+func TestGetJobLeaseRespectsSingleton(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("singleton-targeted")}
+		for _, jobID := range []pgwf.JobID{"job-held", "job-blocked"} {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "singleton-targeted", time.Time{}); err != nil {
+				t.Fatalf("submit %s: %v", jobID, err)
+			}
+		}
+
+		heldLease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-held"), []pgwf.Capability{"singleton-targeted"}, nil)
+		if err != nil {
+			t.Fatalf("get held lease: %v", err)
+		}
+		if heldLease == nil {
+			t.Fatalf("expected held lease")
+		}
+		if heldLease.JobID() != pgwf.JobID("job-held") {
+			t.Fatalf("expected job-held, got %s", heldLease.JobID())
+		}
+
+		blockedLease, err := pgwf.GetJobLease(ctx, db, testTenantID, pgwf.JobID("job-blocked"), pgwf.WorkerID("worker-targeted"), []pgwf.Capability{"singleton-targeted"})
+		if err != nil {
+			t.Fatalf("get blocked job lease: %v", err)
+		}
+		if blockedLease != nil {
+			t.Fatalf("expected singleton-blocked job to be unavailable, got %s", blockedLease.JobID())
+		}
+
+		if err := heldLease.Complete(ctx, db); err != nil {
+			t.Fatalf("complete held lease: %v", err)
+		}
+
+		unblockedLease, err := pgwf.GetJobLease(ctx, db, testTenantID, pgwf.JobID("job-blocked"), pgwf.WorkerID("worker-targeted"), []pgwf.Capability{"singleton-targeted"})
+		if err != nil {
+			t.Fatalf("get unblocked job lease: %v", err)
+		}
+		if unblockedLease == nil {
+			t.Fatalf("expected singleton-blocked job to become available")
+		}
+		if unblockedLease.JobID() != pgwf.JobID("job-blocked") {
+			t.Fatalf("expected job-blocked, got %s", unblockedLease.JobID())
+		}
+	})
+}
+
 func TestRescheduleFlow(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("step1")}

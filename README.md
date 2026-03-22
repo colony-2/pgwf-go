@@ -168,6 +168,17 @@ func AwaitWork(ctx context.Context, db pgwf.DB, worker pgwf.WorkerID, capabiliti
 - `AwaitWork` wraps `GetWork` in an exponential backoff loop until the context is done or a lease is returned.
 - `Lease.Payload()` returns the job payload as raw JSON (default `{}` if unset).
 
+### Lease a Specific Job
+
+```go
+func GetJobLease(ctx context.Context, db pgwf.DB, tenantID pgwf.TenantID, jobID pgwf.JobID, worker pgwf.WorkerID, capabilities []pgwf.Capability) (*pgwf.Lease, error)
+func GetJobLeaseWithOptions(ctx context.Context, db pgwf.DB, tenantID pgwf.TenantID, jobID pgwf.JobID, worker pgwf.WorkerID, capabilities []pgwf.Capability, opts pgwf.GetJobLeaseOptions) (*pgwf.Lease, error)
+```
+
+- `GetJobLease` is the direct, single-shot path for leasing one known job ID without going through the broader queue scan/backoff flow.
+- It still enforces normal lease rules: the job must be `READY`, match one of the supplied capabilities, and not be blocked by an active singleton peer.
+- `GetJobLeaseWithOptions` currently supports `LeaseSeconds` for custom lease durations.
+
 ### Lease helpers
 
 ```go
