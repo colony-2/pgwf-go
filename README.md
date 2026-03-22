@@ -160,12 +160,22 @@ func SubmitJob(ctx context.Context, db pgwf.DB, tenantID pgwf.TenantID, jobID pg
 ### Polling for work
 
 ```go
-func GetWork(ctx context.Context, db pgwf.DB, worker pgwf.WorkerID, capabilities []pgwf.Capability) (*pgwf.Lease, error)
-func AwaitWork(ctx context.Context, db pgwf.DB, worker pgwf.WorkerID, capabilities []pgwf.Capability) (*pgwf.Lease, error)
+func GetWork(ctx context.Context, db pgwf.DB, worker pgwf.WorkerID, capabilities []pgwf.Capability, tenantIDs []pgwf.TenantID) (*pgwf.Lease, error)
+func GetWorkWithOptions(ctx context.Context, db pgwf.DB, worker pgwf.WorkerID, capabilities []pgwf.Capability, opts pgwf.GetWorkOptions) (*pgwf.Lease, error)
+func AwaitWork(ctx context.Context, db pgwf.DB, worker pgwf.WorkerID, capabilities []pgwf.Capability, tenantIDs []pgwf.TenantID) (*pgwf.Lease, error)
+func AwaitWorkWithOptions(ctx context.Context, db pgwf.DB, worker pgwf.WorkerID, capabilities []pgwf.Capability, opts pgwf.GetWorkOptions) (*pgwf.Lease, error)
+
+type GetWorkOptions struct {
+    TenantIDs      []pgwf.TenantID
+    LeaseSeconds   int
+    MetadataEquals []pgwf.MetadataPredicate
+}
 ```
 
-- `GetWork` is a single call to `pgwf.get_work` (limit 1, 60‑second lease).
-- `AwaitWork` wraps `GetWork` in an exponential backoff loop until the context is done or a lease is returned.
+- `GetWork` is the convenience wrapper when you only need a tenant filter; `nil` tenant IDs means all tenants.
+- `GetWorkWithOptions` is the full single-shot lease API and supports tenant filtering, custom lease duration, and metadata equality filters.
+- `AwaitWork` is the convenience polling wrapper around `GetWork`.
+- `AwaitWorkWithOptions` wraps `GetWorkWithOptions` in an exponential backoff loop until the context is done or a lease is returned.
 - `Lease.Payload()` returns the job payload as raw JSON (default `{}` if unset).
 
 ### Lease a Specific Job
