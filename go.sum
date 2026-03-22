@@ -1,5 +1,5 @@
-github.com/colony-2/pgwf v0.0.0-20260213034729-261a13e32396 h1:p3eWO2WDkZ87lFJWH0n3vKto4+5hoGuEaBz4BjNEebE=
-github.com/colony-2/pgwf v0.0.0-20260213034729-261a13e32396/go.mod h1:QJKHOf9Ybwm9V+74tls15xhPVbcDLBwkZ2dcVNAkLuw=
+github.com/colony-2/pgwf v0.0.0-20260312011640-5d59e213242e h1:UEcLftiZN58EKSGEgl+Qh8mUtguo74xgKLGjLC/8wts=
+github.com/colony-2/pgwf v0.0.0-20260312011640-5d59e213242e/go.mod h1:QJKHOf9Ybwm9V+74tls15xhPVbcDLBwkZ2dcVNAkLuw=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/fergusstrange/embedded-postgres v1.32.0 h1:kh2ozEvAx2A0LoIJZEGNwHmoFTEQD243KrHjifcYGMo=

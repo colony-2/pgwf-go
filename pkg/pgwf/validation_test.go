@@ -89,10 +89,59 @@ func TestGetWorkValidationErrors(t *testing.T) {
 	}
 }
 
+func TestGetWorkWithOptionsValidationErrors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	if _, err := GetWorkWithOptions(ctx, stubDB{}, "w", []Capability{"cap"}, GetWorkOptions{
+		LeaseSeconds: -1,
+	}); err == nil {
+		t.Fatalf("expected lease seconds validation error")
+	}
+
+	if _, err := GetWorkWithOptions(ctx, stubDB{}, "w", []Capability{"cap"}, GetWorkOptions{
+		MetadataEquals: []MetadataPredicate{
+			{Path: nil, Values: []any{"x"}},
+		},
+	}); err == nil {
+		t.Fatalf("expected metadata path validation error")
+	}
+
+	if _, err := GetWorkWithOptions(ctx, stubDB{}, "w", []Capability{"cap"}, GetWorkOptions{
+		MetadataEquals: []MetadataPredicate{
+			{Path: []string{"meta"}, Values: []any{1}},
+		},
+	}); err == nil {
+		t.Fatalf("expected metadata string-only validation error")
+	}
+}
+
 func TestAwaitWorkValidation(t *testing.T) {
 	t.Parallel()
 	if _, err := AwaitWork(nil, stubDB{}, WorkerID("w"), []Capability{"cap"}, nil); err == nil {
 		t.Fatalf("expected nil context error")
+	}
+	if _, err := AwaitWorkWithOptions(nil, stubDB{}, WorkerID("w"), []Capability{"cap"}, GetWorkOptions{}); err == nil {
+		t.Fatalf("expected nil context error for AwaitWorkWithOptions")
+	}
+}
+
+func TestMetadataPredicatesToStringFilters(t *testing.T) {
+	t.Parallel()
+
+	paths, values, err := metadataPredicatesToStringFilters([]MetadataPredicate{
+		{Path: []string{"routing", "labels"}, Values: []any{"region:us", "region:ca"}},
+		{Path: []string{"source"}, Values: []any{"api"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(paths) != 2 || paths[0] != `{"routing","labels"}` || paths[1] != `{"source"}` {
+		t.Fatalf("unexpected path literals: %#v", paths)
+	}
+	if len(values) != 2 || values[0] != `{"region:us","region:ca"}` || values[1] != `{"api"}` {
+		t.Fatalf("unexpected value literals: %#v", values)
 	}
 }
 

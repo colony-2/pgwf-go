@@ -91,6 +91,53 @@ func TestSubmitWithPayload(t *testing.T) {
 	})
 }
 
+func TestGetWorkWithMetadataEquals(t *testing.T) {
+	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("limited")}
+
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-api"), deps, nil,
+			map[string]any{"source": "api", "priority": "low"}, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit job-api: %v", err)
+		}
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-batch"), deps, nil,
+			map[string]any{"source": "batch", "priority": "high"}, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			t.Fatalf("submit job-batch: %v", err)
+		}
+
+		lease, err := pgwf.GetWorkWithOptions(ctx, db, pgwf.WorkerID("worker-limited"), []pgwf.Capability{"limited"}, pgwf.GetWorkOptions{
+			MetadataEquals: []pgwf.MetadataPredicate{
+				{Path: []string{"source"}, Values: []any{"batch", "scheduler"}},
+				{Path: []string{"priority"}, Values: []any{"high"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("get limited work: %v", err)
+		}
+		if lease == nil {
+			t.Fatalf("expected matching lease")
+		}
+		if lease.JobID() != pgwf.JobID("job-batch") {
+			t.Fatalf("expected job-batch, got %s", lease.JobID())
+		}
+
+		if err := lease.Complete(ctx, db); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+
+		lease, err = pgwf.GetWorkWithOptions(ctx, db, pgwf.WorkerID("worker-none"), []pgwf.Capability{"limited"}, pgwf.GetWorkOptions{
+			MetadataEquals: []pgwf.MetadataPredicate{
+				{Path: []string{"source"}, Values: []any{"scheduler"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("get limited work no match: %v", err)
+		}
+		if lease != nil {
+			t.Fatalf("expected no lease for unmatched metadata filter")
+		}
+	})
+}
+
 func TestRescheduleFlow(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("step1")}
