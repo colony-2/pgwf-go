@@ -12,13 +12,13 @@ import (
 
 const submitStmt = `
 SELECT job_id, next_need, wait_for, payload, available_at
-FROM pgwf.submit_job($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+FROM pgwf.submit_job($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 `
 
 // SubmitJob inserts workflow metadata using pgwf.submit_job.
 // metadata is optional; nil defaults to {} and is immutable after creation.
 // expiresAt is optional; zero value keeps the job leaseable indefinitely.
-func SubmitJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, deps JobDependencies, payload any, metadata any, worker WorkerID, singletonKey string, expiresAt time.Time) error {
+func SubmitJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, deps JobDependencies, payload any, metadata any, worker WorkerID, expiresAt time.Time) error {
 	if db == nil {
 		return fmt.Errorf("pgwf: nil DB")
 	}
@@ -55,7 +55,6 @@ func SubmitJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, deps 
 		pq.Array(deps.waitForStrings()),
 		payloadArg,
 		metadataArg,
-		singletonArg(singletonKey),
 		deps.availableAtArg(),
 		expiresAtArg(expiresAt),
 		altNeedArg,
@@ -82,13 +81,6 @@ func expiresAtArg(t time.Time) any {
 		return nil
 	}
 	return t
-}
-
-func singletonArg(key string) any {
-	if key == "" {
-		return nil
-	}
-	return key
 }
 
 func normalizePayload(payload any) (json.RawMessage, error) {

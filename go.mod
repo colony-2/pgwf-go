@@ -3,7 +3,7 @@ module github.com/colony-2/pgwf-go
 go 1.24.1
 
 require (
-	github.com/colony-2/pgwf v0.0.0-20260322202125-4a9450d5502e
+	github.com/colony-2/pgwf v0.0.0-20260324185146-00a58a45f7d8
 	github.com/fergusstrange/embedded-postgres v1.32.0
 	github.com/lib/pq v1.10.9
 )

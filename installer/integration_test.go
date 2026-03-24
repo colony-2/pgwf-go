@@ -23,7 +23,7 @@ const testTenantID = pgwf.TenantID("test-tenant")
 func TestSubmitGetComplete(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("ingest")}
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-1"), deps, nil, nil, pgwf.WorkerID("producer"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-1"), deps, nil, nil, pgwf.WorkerID("producer"), time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -49,7 +49,7 @@ func TestSubmitWithExpiry(t *testing.T) {
 		deps := pgwf.JobDependencies{
 			NextNeed: pgwf.Capability("expiring"),
 		}
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-expired"), deps, nil, nil, pgwf.WorkerID("producer"), "", time.Now().Add(-time.Hour)); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-expired"), deps, nil, nil, pgwf.WorkerID("producer"), time.Now().Add(-time.Hour)); err != nil {
 			t.Fatalf("submit with expiry: %v", err)
 		}
 
@@ -67,7 +67,7 @@ func TestSubmitWithPayload(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("payload")}
 		payload := map[string]any{"hello": "world", "n": 3}
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-with-payload"), deps, payload, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-with-payload"), deps, payload, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit with payload: %v", err)
 		}
 
@@ -96,11 +96,11 @@ func TestGetWorkWithMetadataEquals(t *testing.T) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("limited")}
 
 		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-api"), deps, nil,
-			map[string]any{"source": "api", "priority": "low"}, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			map[string]any{"source": "api", "priority": "low"}, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit job-api: %v", err)
 		}
 		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-batch"), deps, nil,
-			map[string]any{"source": "batch", "priority": "high"}, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			map[string]any{"source": "batch", "priority": "high"}, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit job-batch: %v", err)
 		}
 
@@ -142,7 +142,7 @@ func TestGetJobLease(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("targeted")}
 		for _, jobID := range []pgwf.JobID{"job-older", "job-target"} {
-			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 				t.Fatalf("submit %s: %v", jobID, err)
 			}
 		}
@@ -185,7 +185,7 @@ func TestGetJobLease(t *testing.T) {
 func TestGetJobLeaseReturnsNilWhenUnavailable(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("targeted")}
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-target"), deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-target"), deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -199,16 +199,16 @@ func TestGetJobLeaseReturnsNilWhenUnavailable(t *testing.T) {
 	})
 }
 
-func TestGetJobLeaseRespectsSingleton(t *testing.T) {
+func TestGetJobLeaseAllowsTargetingWhileAnotherJobIsActive(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
-		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("singleton-targeted")}
-		for _, jobID := range []pgwf.JobID{"job-held", "job-blocked"} {
-			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "singleton-targeted", time.Time{}); err != nil {
+		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("targeted")}
+		for _, jobID := range []pgwf.JobID{"job-held", "job-target"} {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 				t.Fatalf("submit %s: %v", jobID, err)
 			}
 		}
 
-		heldLease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-held"), []pgwf.Capability{"singleton-targeted"}, nil)
+		heldLease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker-held"), []pgwf.Capability{"targeted"}, nil)
 		if err != nil {
 			t.Fatalf("get held lease: %v", err)
 		}
@@ -219,27 +219,15 @@ func TestGetJobLeaseRespectsSingleton(t *testing.T) {
 			t.Fatalf("expected job-held, got %s", heldLease.JobID())
 		}
 
-		blockedLease, err := pgwf.GetJobLease(ctx, db, testTenantID, pgwf.JobID("job-blocked"), pgwf.WorkerID("worker-targeted"), []pgwf.Capability{"singleton-targeted"})
+		targetLease, err := pgwf.GetJobLease(ctx, db, testTenantID, pgwf.JobID("job-target"), pgwf.WorkerID("worker-targeted"), []pgwf.Capability{"targeted"})
 		if err != nil {
-			t.Fatalf("get blocked job lease: %v", err)
+			t.Fatalf("get target job lease: %v", err)
 		}
-		if blockedLease != nil {
-			t.Fatalf("expected singleton-blocked job to be unavailable, got %s", blockedLease.JobID())
+		if targetLease == nil {
+			t.Fatalf("expected target lease while another job is active")
 		}
-
-		if err := heldLease.Complete(ctx, db); err != nil {
-			t.Fatalf("complete held lease: %v", err)
-		}
-
-		unblockedLease, err := pgwf.GetJobLease(ctx, db, testTenantID, pgwf.JobID("job-blocked"), pgwf.WorkerID("worker-targeted"), []pgwf.Capability{"singleton-targeted"})
-		if err != nil {
-			t.Fatalf("get unblocked job lease: %v", err)
-		}
-		if unblockedLease == nil {
-			t.Fatalf("expected singleton-blocked job to become available")
-		}
-		if unblockedLease.JobID() != pgwf.JobID("job-blocked") {
-			t.Fatalf("expected job-blocked, got %s", unblockedLease.JobID())
+		if targetLease.JobID() != pgwf.JobID("job-target") {
+			t.Fatalf("expected job-target, got %s", targetLease.JobID())
 		}
 	})
 }
@@ -247,7 +235,7 @@ func TestGetJobLeaseRespectsSingleton(t *testing.T) {
 func TestRescheduleFlow(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("step1")}
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-resched"), deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-resched"), deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -289,7 +277,7 @@ func TestRescheduleFlow(t *testing.T) {
 func TestLeaseExtend(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("extend")}
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-extend"), deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("job-extend"), deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -318,7 +306,7 @@ func TestLeaseExtend(t *testing.T) {
 func TestCompleteUnheldJob(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("adhoc")}
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("adhoc-job"), deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("adhoc-job"), deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -339,7 +327,7 @@ func TestCompleteUnheldJob(t *testing.T) {
 func TestRescheduleUnheldJob(t *testing.T) {
 	runDatabaseTest(t, func(ctx context.Context, db *sql.DB) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("initial")}
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("unheld-resched"), deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("unheld-resched"), deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -404,7 +392,7 @@ func TestAwaitWork(t *testing.T) {
 
 		time.Sleep(500 * time.Millisecond)
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("await")}
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("await-job"), deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, pgwf.JobID("await-job"), deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 
@@ -506,7 +494,7 @@ func TestGetJobStatus_ActiveJob(t *testing.T) {
 		// Submit a job
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("process")}
 		jobID := pgwf.JobID("status-test-active")
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, map[string]any{"test": "data"}, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, map[string]any{"test": "data"}, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit job: %v", err)
 		}
 
@@ -564,7 +552,7 @@ func TestGetJobStatus_ArchivedJob(t *testing.T) {
 		// Submit and complete a job
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("archive-test")}
 		jobID := pgwf.JobID("status-test-archived")
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit job: %v", err)
 		}
 
@@ -604,7 +592,7 @@ func TestCheckJobExists(t *testing.T) {
 		// Submit a job
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("exists-test")}
 		jobID := pgwf.JobID("exists-test-job")
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit job: %v", err)
 		}
 
@@ -636,7 +624,7 @@ func TestCheckJobExistsWithTenant(t *testing.T) {
 		// Submit a job
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("tenant-test")}
 		jobID := pgwf.JobID("tenant-test-job")
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit job: %v", err)
 		}
 
@@ -669,7 +657,7 @@ func TestGetJob_WithAndWithoutPayload(t *testing.T) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("payload-test")}
 		jobID := pgwf.JobID("getjob-payload-test")
 		payload := map[string]any{"key": "value", "number": 42}
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, payload, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, payload, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit job: %v", err)
 		}
 
@@ -709,14 +697,14 @@ func TestFindJobs(t *testing.T) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("find-test")}
 		for i := 0; i < 5; i++ {
 			jobID := pgwf.JobID(fmt.Sprintf("find-test-%d", i))
-			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 				t.Fatalf("submit job %d: %v", i, err)
 			}
 		}
 
 		// Submit job with different capability
 		deps2 := pgwf.JobDependencies{NextNeed: pgwf.Capability("other-cap")}
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, "other-job", deps2, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, "other-job", deps2, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit other job: %v", err)
 		}
 
@@ -749,12 +737,12 @@ func TestListJobs_WithFilters(t *testing.T) {
 		// Submit jobs with different states
 		// Ready job
 		deps1 := pgwf.JobDependencies{NextNeed: pgwf.Capability("list-test")}
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, "list-ready", deps1, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, "list-ready", deps1, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit ready job: %v", err)
 		}
 
 		// Active job (leased)
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, "list-active", deps1, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, "list-active", deps1, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit active job: %v", err)
 		}
 		lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker"), []pgwf.Capability{"list-test"}, nil)
@@ -764,7 +752,7 @@ func TestListJobs_WithFilters(t *testing.T) {
 		if lease.JobID() != "list-active" {
 			// Try to get the right job
 			_ = lease.Complete(ctx, db)
-			if err := pgwf.SubmitJob(ctx, db, testTenantID, "list-active-2", deps1, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, "list-active-2", deps1, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 				t.Fatalf("submit active job 2: %v", err)
 			}
 			lease, err = pgwf.GetWork(ctx, db, pgwf.WorkerID("worker"), []pgwf.Capability{"list-test"}, nil)
@@ -774,7 +762,7 @@ func TestListJobs_WithFilters(t *testing.T) {
 		}
 
 		// Completed job
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, "list-completed", deps1, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, "list-completed", deps1, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit completed job: %v", err)
 		}
 		completeLease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker2"), []pgwf.Capability{"list-test"}, nil)
@@ -832,7 +820,7 @@ func TestGetJobStatusBatch(t *testing.T) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("batch-test")}
 		jobIDs := []pgwf.JobID{"batch-1", "batch-2", "batch-3"}
 		for _, jobID := range jobIDs {
-			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 				t.Fatalf("submit job %s: %v", jobID, err)
 			}
 		}
@@ -873,7 +861,7 @@ func TestIsJobArchived(t *testing.T) {
 		// Submit and complete a job
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("archived-check")}
 		jobID := pgwf.JobID("archived-check-job")
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit job: %v", err)
 		}
 
@@ -912,7 +900,7 @@ func TestListArchivedJobs(t *testing.T) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("archive-list")}
 		for i := 0; i < 3; i++ {
 			jobID := pgwf.JobID(fmt.Sprintf("archive-list-%d", i))
-			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 				t.Fatalf("submit job %d: %v", i, err)
 			}
 			lease, err := pgwf.GetWork(ctx, db, pgwf.WorkerID("worker"), []pgwf.Capability{"archive-list"}, nil)
@@ -949,7 +937,7 @@ func TestListJobs_Pagination(t *testing.T) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("pagination-test")}
 		for i := 0; i < 10; i++ {
 			jobID := pgwf.JobID(fmt.Sprintf("page-test-%d", i))
-			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 				t.Fatalf("submit job %d: %v", i, err)
 			}
 		}
@@ -976,7 +964,7 @@ func TestGetJobStatus_CancelledJob(t *testing.T) {
 		// Submit a job
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("cancel-test")}
 		jobID := pgwf.JobID("cancel-status-test")
-		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+		if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 			t.Fatalf("submit job: %v", err)
 		}
 
@@ -1010,7 +998,7 @@ func TestListJobs_CursorPagination(t *testing.T) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("cursor-test")}
 		for i := 0; i < 10; i++ {
 			jobID := pgwf.JobID(fmt.Sprintf("cursor-job-%02d", i))
-			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 				t.Fatalf("submit job %d: %v", i, err)
 			}
 			time.Sleep(time.Millisecond) // Ensure different timestamps
@@ -1130,7 +1118,7 @@ func TestListJobs_CursorInvalidation(t *testing.T) {
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("cursor-invalid")}
 		for i := 0; i < 5; i++ {
 			jobID := pgwf.JobID(fmt.Sprintf("invalid-cursor-job-%d", i))
-			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("submitter"), time.Time{}); err != nil {
 				t.Fatalf("submit job %d: %v", i, err)
 			}
 		}
@@ -1187,17 +1175,17 @@ func TestListJobs_MultiTenantFiltering(t *testing.T) {
 		// Submit jobs for different tenants
 		deps := pgwf.JobDependencies{NextNeed: pgwf.Capability("multi-tenant-test")}
 		for i := 0; i < 3; i++ {
-			if err := pgwf.SubmitJob(ctx, db, tenant1, pgwf.JobID(fmt.Sprintf("t1-job-%d", i)), deps, nil, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, tenant1, pgwf.JobID(fmt.Sprintf("t1-job-%d", i)), deps, nil, nil, pgwf.WorkerID("sub"), time.Time{}); err != nil {
 				t.Fatalf("submit tenant1 job: %v", err)
 			}
 		}
 		for i := 0; i < 4; i++ {
-			if err := pgwf.SubmitJob(ctx, db, tenant2, pgwf.JobID(fmt.Sprintf("t2-job-%d", i)), deps, nil, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, tenant2, pgwf.JobID(fmt.Sprintf("t2-job-%d", i)), deps, nil, nil, pgwf.WorkerID("sub"), time.Time{}); err != nil {
 				t.Fatalf("submit tenant2 job: %v", err)
 			}
 		}
 		for i := 0; i < 2; i++ {
-			if err := pgwf.SubmitJob(ctx, db, tenant3, pgwf.JobID(fmt.Sprintf("t3-job-%d", i)), deps, nil, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, tenant3, pgwf.JobID(fmt.Sprintf("t3-job-%d", i)), deps, nil, nil, pgwf.WorkerID("sub"), time.Time{}); err != nil {
 				t.Fatalf("submit tenant3 job: %v", err)
 			}
 		}
@@ -1269,7 +1257,7 @@ func TestListJobs_MultiPatternFiltering(t *testing.T) {
 		for i, jobType := range jobTypes {
 			deps := pgwf.JobDependencies{NextNeed: pgwf.Capability(jobType)}
 			jobID := pgwf.JobID(fmt.Sprintf("pattern-job-%d", i))
-			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("sub"), time.Time{}); err != nil {
 				t.Fatalf("submit job %d: %v", i, err)
 			}
 		}
@@ -1346,13 +1334,13 @@ func TestListJobs_CursorWithMultiTenantAndMultiPattern(t *testing.T) {
 			deps1 := pgwf.JobDependencies{NextNeed: pgwf.Capability("type-a:task")}
 			deps2 := pgwf.JobDependencies{NextNeed: pgwf.Capability("type-b:task")}
 
-			if err := pgwf.SubmitJob(ctx, db, tenant1, pgwf.JobID(fmt.Sprintf("t1-a-%d", i)), deps1, nil, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, tenant1, pgwf.JobID(fmt.Sprintf("t1-a-%d", i)), deps1, nil, nil, pgwf.WorkerID("sub"), time.Time{}); err != nil {
 				t.Fatalf("submit t1 type-a: %v", err)
 			}
-			if err := pgwf.SubmitJob(ctx, db, tenant1, pgwf.JobID(fmt.Sprintf("t1-b-%d", i)), deps2, nil, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, tenant1, pgwf.JobID(fmt.Sprintf("t1-b-%d", i)), deps2, nil, nil, pgwf.WorkerID("sub"), time.Time{}); err != nil {
 				t.Fatalf("submit t1 type-b: %v", err)
 			}
-			if err := pgwf.SubmitJob(ctx, db, tenant2, pgwf.JobID(fmt.Sprintf("t2-a-%d", i)), deps1, nil, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, tenant2, pgwf.JobID(fmt.Sprintf("t2-a-%d", i)), deps1, nil, nil, pgwf.WorkerID("sub"), time.Time{}); err != nil {
 				t.Fatalf("submit t2 type-a: %v", err)
 			}
 			time.Sleep(time.Millisecond)
@@ -1412,7 +1400,7 @@ func TestListJobs_SortingConsistency(t *testing.T) {
 				AvailableAt: now.Add(time.Duration(i) * time.Minute),
 			}
 			jobID := pgwf.JobID(fmt.Sprintf("sort-job-%d", i))
-			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("sub"), "", time.Time{}); err != nil {
+			if err := pgwf.SubmitJob(ctx, db, testTenantID, jobID, deps, nil, nil, pgwf.WorkerID("sub"), time.Time{}); err != nil {
 				t.Fatalf("submit job %d: %v", i, err)
 			}
 		}

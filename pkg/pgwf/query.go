@@ -37,11 +37,10 @@ type JobStatusInfo struct {
 	Status JobStatus
 
 	// Job configuration
-	NextNeed     string
-	WaitFor      []string
-	SingletonKey *string
-	Payload      json.RawMessage
-	Metadata     json.RawMessage
+	NextNeed string
+	WaitFor  []string
+	Payload  json.RawMessage
+	Metadata json.RawMessage
 
 	// Timing
 	AvailableAt time.Time
@@ -78,7 +77,6 @@ type JobListItem struct {
 	Status                 JobStatus
 	NextNeed               string
 	WaitFor                []string
-	SingletonKey           *string
 	Metadata               json.RawMessage
 	AvailableAt            time.Time
 	ExpiresAt              *time.Time // nil if 'infinity'
@@ -105,7 +103,6 @@ type ListJobsOptions struct {
 	Statuses           []JobStatus // Filter by status (empty = all statuses)
 	JobTypePattern     string      // DEPRECATED: Use JobTypePatterns for single or multiple patterns
 	JobTypePatterns    []string    // Filter by job type patterns (SQL LIKE patterns, OR semantics)
-	SingletonKey       string      // Filter by singleton key
 	CreatedAfter       *time.Time  // Filter by creation time
 	CreatedBefore      *time.Time
 	CompletionStatuses []CompletionStatus  // Filter by completion status (archived jobs only)
@@ -167,7 +164,6 @@ type JobInfo struct {
 	Status                 JobStatus
 	NextNeed               string
 	WaitFor                []string
-	SingletonKey           *string
 	Metadata               json.RawMessage
 	AvailableAt            time.Time
 	ExpiresAt              *time.Time // nil if 'infinity'
@@ -193,7 +189,6 @@ type JobDetail struct {
 	Status                 JobStatus
 	NextNeed               string
 	WaitFor                []string
-	SingletonKey           *string
 	Payload                json.RawMessage // Only populated if IncludePayload option is true
 	Metadata               json.RawMessage
 	AvailableAt            time.Time
@@ -253,7 +248,7 @@ func GetJobStatus(ctx context.Context, db DB, tenantID TenantID, jobID JobID) (*
 	// Try active jobs first
 	const activeQuery = `
 		SELECT
-			tenant_id, job_id, status, next_need, wait_for, singleton_key, payload, metadata,
+			tenant_id, job_id, status, next_need, wait_for, payload, metadata,
 			available_at,
 			CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 			created_at,
@@ -279,7 +274,7 @@ func GetJobStatus(ctx context.Context, db DB, tenantID TenantID, jobID JobID) (*
 	// Try archived jobs
 	const archiveQuery = `
 		SELECT
-			tenant_id, job_id, next_need, wait_for, singleton_key, payload, metadata,
+			tenant_id, job_id, next_need, wait_for, payload, metadata,
 			CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 			created_at, archived_at,
 			completion_status, completion_detail,
@@ -305,7 +300,6 @@ func scanJobStatusInfo(row *sql.Row) (*JobStatusInfo, error) {
 	var info JobStatusInfo
 	var status string
 	var waitFor pq.StringArray
-	var singletonKey sql.NullString
 	var archivedAt sql.NullTime
 	var completionStatus sql.NullString
 	var completionDetail sql.NullString
@@ -321,7 +315,6 @@ func scanJobStatusInfo(row *sql.Row) (*JobStatusInfo, error) {
 		&status,
 		&info.NextNeed,
 		(*pq.StringArray)(&waitFor),
-		&singletonKey,
 		&info.Payload,
 		&info.Metadata,
 		&info.AvailableAt,
@@ -344,9 +337,6 @@ func scanJobStatusInfo(row *sql.Row) (*JobStatusInfo, error) {
 
 	info.Status = JobStatus(status)
 	info.WaitFor = waitFor
-	if singletonKey.Valid {
-		info.SingletonKey = &singletonKey.String
-	}
 	if expiresAt.Valid {
 		info.ExpiresAt = &expiresAt.Time
 	}
@@ -380,7 +370,6 @@ func scanJobStatusInfo(row *sql.Row) (*JobStatusInfo, error) {
 func scanJobStatusInfoArchive(row *sql.Row) (*JobStatusInfo, error) {
 	var info JobStatusInfo
 	var waitFor pq.StringArray
-	var singletonKey sql.NullString
 	var expiresAt sql.NullTime
 	var archivedAt sql.NullTime
 	var completionStatus sql.NullString
@@ -394,7 +383,6 @@ func scanJobStatusInfoArchive(row *sql.Row) (*JobStatusInfo, error) {
 		&info.JobID,
 		&info.NextNeed,
 		(*pq.StringArray)(&waitFor),
-		&singletonKey,
 		&info.Payload,
 		&info.Metadata,
 		&expiresAt,
@@ -428,9 +416,6 @@ func scanJobStatusInfoArchive(row *sql.Row) (*JobStatusInfo, error) {
 	}
 
 	info.WaitFor = waitFor
-	if singletonKey.Valid {
-		info.SingletonKey = &singletonKey.String
-	}
 	if expiresAt.Valid {
 		info.ExpiresAt = &expiresAt.Time
 	}
@@ -559,7 +544,7 @@ func GetJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, opts Get
 	// Try active jobs first
 	activeQuery := fmt.Sprintf(`
 		SELECT
-			tenant_id, job_id, status, next_need, wait_for, singleton_key, %s, metadata,
+			tenant_id, job_id, status, next_need, wait_for, %s, metadata,
 			available_at,
 			CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 			created_at,
@@ -585,7 +570,7 @@ func GetJob(ctx context.Context, db DB, tenantID TenantID, jobID JobID, opts Get
 	// Try archived jobs
 	archiveQuery := fmt.Sprintf(`
 		SELECT
-			tenant_id, job_id, next_need, wait_for, singleton_key, %s, metadata,
+			tenant_id, job_id, next_need, wait_for, %s, metadata,
 			CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 			created_at, archived_at,
 			completion_status, completion_detail,
@@ -611,7 +596,6 @@ func scanJobDetail(row *sql.Row) (*JobDetail, error) {
 	var detail JobDetail
 	var status string
 	var waitFor pq.StringArray
-	var singletonKey sql.NullString
 	var payload sql.NullString
 	var metadata json.RawMessage
 	var expiresAt sql.NullTime
@@ -629,7 +613,6 @@ func scanJobDetail(row *sql.Row) (*JobDetail, error) {
 		&status,
 		&detail.NextNeed,
 		(*pq.StringArray)(&waitFor),
-		&singletonKey,
 		&payload,
 		&metadata,
 		&detail.AvailableAt,
@@ -652,9 +635,6 @@ func scanJobDetail(row *sql.Row) (*JobDetail, error) {
 
 	detail.Status = JobStatus(status)
 	detail.WaitFor = waitFor
-	if singletonKey.Valid {
-		detail.SingletonKey = &singletonKey.String
-	}
 	if payload.Valid {
 		detail.Payload = json.RawMessage(payload.String)
 	}
@@ -692,7 +672,6 @@ func scanJobDetail(row *sql.Row) (*JobDetail, error) {
 func scanJobDetailArchive(row *sql.Row) (*JobDetail, error) {
 	var detail JobDetail
 	var waitFor pq.StringArray
-	var singletonKey sql.NullString
 	var payload sql.NullString
 	var metadata json.RawMessage
 	var expiresAt sql.NullTime
@@ -708,7 +687,6 @@ func scanJobDetailArchive(row *sql.Row) (*JobDetail, error) {
 		&detail.JobID,
 		&detail.NextNeed,
 		(*pq.StringArray)(&waitFor),
-		&singletonKey,
 		&payload,
 		&metadata,
 		&expiresAt,
@@ -742,9 +720,6 @@ func scanJobDetailArchive(row *sql.Row) (*JobDetail, error) {
 	}
 
 	detail.WaitFor = waitFor
-	if singletonKey.Valid {
-		detail.SingletonKey = &singletonKey.String
-	}
 	if payload.Valid {
 		detail.Payload = json.RawMessage(payload.String)
 	}
@@ -840,7 +815,7 @@ func FindJobs(ctx context.Context, db DB, opts FindJobsOptions) ([]JobInfo, erro
 	// Add status and next_need filters
 	query := fmt.Sprintf(`
 		SELECT
-			tenant_id, job_id, status, next_need, wait_for, singleton_key, metadata,
+			tenant_id, job_id, status, next_need, wait_for, metadata,
 			available_at,
 			CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 			created_at,
@@ -883,7 +858,6 @@ func scanJobInfo(rows interface{ Scan(...interface{}) error }) (*JobInfo, error)
 	var job JobInfo
 	var status string
 	var waitFor pq.StringArray
-	var singletonKey sql.NullString
 	var metadata json.RawMessage
 	var expiresAt sql.NullTime
 	var leaseID sql.NullString
@@ -897,7 +871,6 @@ func scanJobInfo(rows interface{ Scan(...interface{}) error }) (*JobInfo, error)
 		&status,
 		&job.NextNeed,
 		(*pq.StringArray)(&waitFor),
-		&singletonKey,
 		&metadata,
 		&job.AvailableAt,
 		&expiresAt,
@@ -916,9 +889,6 @@ func scanJobInfo(rows interface{ Scan(...interface{}) error }) (*JobInfo, error)
 
 	job.Status = JobStatus(status)
 	job.WaitFor = waitFor
-	if singletonKey.Valid {
-		job.SingletonKey = &singletonKey.String
-	}
 	job.Metadata = metadata
 	if expiresAt.Valid {
 		job.ExpiresAt = &expiresAt.Time
@@ -965,7 +935,7 @@ func GetJobStatusBatch(ctx context.Context, db DB, tenantID TenantID, jobIDs []J
 	// Query active jobs
 	const activeQuery = `
 		SELECT
-			tenant_id, job_id, status, next_need, wait_for, singleton_key, payload, metadata,
+			tenant_id, job_id, status, next_need, wait_for, payload, metadata,
 			available_at,
 			CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 			created_at,
@@ -1003,7 +973,7 @@ func GetJobStatusBatch(ctx context.Context, db DB, tenantID TenantID, jobIDs []J
 	// Query archived jobs for any not found in active
 	const archiveQuery = `
 		SELECT
-			tenant_id, job_id, next_need, wait_for, singleton_key, payload, metadata,
+			tenant_id, job_id, next_need, wait_for, payload, metadata,
 			CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 			created_at, archived_at,
 			completion_status, completion_detail,
@@ -1042,7 +1012,6 @@ func scanJobStatusInfoRows(rows interface{ Scan(...interface{}) error }) (*JobSt
 	var info JobStatusInfo
 	var status string
 	var waitFor pq.StringArray
-	var singletonKey sql.NullString
 	var expiresAt sql.NullTime
 	var archivedAt sql.NullTime
 	var completionStatus sql.NullString
@@ -1058,7 +1027,6 @@ func scanJobStatusInfoRows(rows interface{ Scan(...interface{}) error }) (*JobSt
 		&status,
 		&info.NextNeed,
 		(*pq.StringArray)(&waitFor),
-		&singletonKey,
 		&info.Payload,
 		&info.Metadata,
 		&info.AvailableAt,
@@ -1081,9 +1049,6 @@ func scanJobStatusInfoRows(rows interface{ Scan(...interface{}) error }) (*JobSt
 
 	info.Status = JobStatus(status)
 	info.WaitFor = waitFor
-	if singletonKey.Valid {
-		info.SingletonKey = &singletonKey.String
-	}
 	if expiresAt.Valid {
 		info.ExpiresAt = &expiresAt.Time
 	}
@@ -1117,7 +1082,6 @@ func scanJobStatusInfoRows(rows interface{ Scan(...interface{}) error }) (*JobSt
 func scanJobStatusInfoArchiveRows(rows interface{ Scan(...interface{}) error }) (*JobStatusInfo, error) {
 	var info JobStatusInfo
 	var waitFor pq.StringArray
-	var singletonKey sql.NullString
 	var expiresAt sql.NullTime
 	var archivedAt sql.NullTime
 	var completionStatus sql.NullString
@@ -1131,7 +1095,6 @@ func scanJobStatusInfoArchiveRows(rows interface{ Scan(...interface{}) error }) 
 		&info.JobID,
 		&info.NextNeed,
 		(*pq.StringArray)(&waitFor),
-		&singletonKey,
 		&info.Payload,
 		&info.Metadata,
 		&expiresAt,
@@ -1165,9 +1128,6 @@ func scanJobStatusInfoArchiveRows(rows interface{ Scan(...interface{}) error }) 
 	}
 
 	info.WaitFor = waitFor
-	if singletonKey.Valid {
-		info.SingletonKey = &singletonKey.String
-	}
 	if expiresAt.Valid {
 		info.ExpiresAt = &expiresAt.Time
 	}
@@ -1352,7 +1312,6 @@ func hashListJobsOptions(opts ListJobsOptions) string {
 		fmt.Fprintf(h, "jtp:%s;", pattern)
 	}
 
-	fmt.Fprintf(h, "singleton_key:%s;", opts.SingletonKey)
 	fmt.Fprintf(h, "include_archived:%t;", opts.IncludeArchived)
 	for _, status := range opts.CompletionStatuses {
 		fmt.Fprintf(h, "completion_status:%s;", status)
@@ -1559,13 +1518,6 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 		conditions = append(conditions, "("+joinStrings(patterns, " OR ")+")")
 	}
 
-	// Singleton key filter
-	if opts.SingletonKey != "" {
-		conditions = append(conditions, fmt.Sprintf("singleton_key = $%d", argIdx))
-		args = append(args, opts.SingletonKey)
-		argIdx++
-	}
-
 	// Created after filter
 	if opts.CreatedAfter != nil {
 		conditions = append(conditions, fmt.Sprintf("created_at > $%d", argIdx))
@@ -1624,7 +1576,7 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 		// Query both active and archived with UNION
 		query = fmt.Sprintf(`
 			SELECT
-				tenant_id, job_id, status, next_need, wait_for, singleton_key, metadata,
+				tenant_id, job_id, status, next_need, wait_for, metadata,
 				available_at,
 				CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 				created_at,
@@ -1641,7 +1593,7 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 			SELECT
 				tenant_id, job_id,
 				CASE WHEN completion_status = 'cancelled' THEN 'CANCELLED' ELSE 'COMPLETED' END as status,
-				next_need, wait_for, singleton_key, metadata,
+				next_need, wait_for, metadata,
 				created_at as available_at,
 				CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 				created_at,
@@ -1661,7 +1613,7 @@ func ListJobs(ctx context.Context, db DB, opts ListJobsOptions) (*ListJobsResult
 		// Query only active jobs
 		query = fmt.Sprintf(`
 			SELECT
-				tenant_id, job_id, status, next_need, wait_for, singleton_key, metadata,
+				tenant_id, job_id, status, next_need, wait_for, metadata,
 				available_at,
 				CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 				created_at,
@@ -1729,7 +1681,6 @@ func scanJobListItem(rows interface{ Scan(...interface{}) error }) (*JobListItem
 	var job JobListItem
 	var status string
 	var waitFor pq.StringArray
-	var singletonKey sql.NullString
 	var metadata json.RawMessage
 	var expiresAt sql.NullTime
 	var archivedAt sql.NullTime
@@ -1746,7 +1697,6 @@ func scanJobListItem(rows interface{ Scan(...interface{}) error }) (*JobListItem
 		&status,
 		&job.NextNeed,
 		(*pq.StringArray)(&waitFor),
-		&singletonKey,
 		&metadata,
 		&job.AvailableAt,
 		&expiresAt,
@@ -1768,9 +1718,6 @@ func scanJobListItem(rows interface{ Scan(...interface{}) error }) (*JobListItem
 
 	job.Status = JobStatus(status)
 	job.WaitFor = waitFor
-	if singletonKey.Valid {
-		job.SingletonKey = &singletonKey.String
-	}
 	job.Metadata = metadata
 	if expiresAt.Valid {
 		job.ExpiresAt = &expiresAt.Time
@@ -1870,7 +1817,7 @@ func ListArchivedJobs(ctx context.Context, db DB, opts ListArchivedJobsOptions) 
 		SELECT
 			tenant_id, job_id,
 			CASE WHEN completion_status = 'cancelled' THEN 'CANCELLED' ELSE 'COMPLETED' END as status,
-			next_need, wait_for, singleton_key, metadata,
+			next_need, wait_for, metadata,
 			created_at as available_at,
 			CASE WHEN expires_at = 'infinity' THEN NULL ELSE expires_at END,
 			created_at, archived_at,
@@ -1927,7 +1874,6 @@ func scanJobListItemArchive(rows interface{ Scan(...interface{}) error }) (*JobL
 	var job JobListItem
 	var status string
 	var waitFor pq.StringArray
-	var singletonKey sql.NullString
 	var metadata json.RawMessage
 	var expiresAt sql.NullTime
 	var completionStatus sql.NullString
@@ -1942,7 +1888,6 @@ func scanJobListItemArchive(rows interface{ Scan(...interface{}) error }) (*JobL
 		&status,
 		&job.NextNeed,
 		(*pq.StringArray)(&waitFor),
-		&singletonKey,
 		&metadata,
 		&job.AvailableAt,
 		&expiresAt,
@@ -1963,9 +1908,6 @@ func scanJobListItemArchive(rows interface{ Scan(...interface{}) error }) (*JobL
 
 	job.Status = JobStatus(status)
 	job.WaitFor = waitFor
-	if singletonKey.Valid {
-		job.SingletonKey = &singletonKey.String
-	}
 	job.Metadata = metadata
 	if expiresAt.Valid {
 		job.ExpiresAt = &expiresAt.Time

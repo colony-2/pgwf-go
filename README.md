@@ -145,17 +145,16 @@ func ListArchivedJobs(ctx context.Context, db pgwf.DB, opts pgwf.ListArchivedJob
 ### Submission
 
 ```go
-func SubmitJob(ctx context.Context, db pgwf.DB, tenantID pgwf.TenantID, jobID pgwf.JobID, deps pgwf.JobDependencies, payload any, metadata any, worker pgwf.WorkerID, singletonKey string, expiresAt time.Time) error
+func SubmitJob(ctx context.Context, db pgwf.DB, tenantID pgwf.TenantID, jobID pgwf.JobID, deps pgwf.JobDependencies, payload any, metadata any, worker pgwf.WorkerID, expiresAt time.Time) error
 ```
 
 - Validates non-empty IDs and required dependency fields.
 - Accepts an immutable JSON payload (object, ≤512 bytes stored) that workers will receive on lease.
 - Accepts immutable JSON metadata (object) stored with the job and queryable via list/status APIs.
-- Optional `singletonKey` enforces one active job per key at submission time; pass `""` to skip.
 - Optional `expiresAt` sets `pgwf.jobs.expires_at`; leave zero to keep the job leaseable indefinitely.
 - Alternate capability fallback: set `deps.Alternate = &pgwf.AlternateNext{Need: "cap.alt", After: 5 * time.Minute}` to pivot to `cap.alt` once the job has been READY and unleased for 5 minutes. Use `Alternate = &pgwf.AlternateNext{}` in a reschedule to clear any existing alternate.
 - Accepts `*sql.DB` or `*sql.Tx`, enabling atomic submission alongside your own business tables.
-- Wraps dependency/singleton violations in `pgwf.ErrDependencyViolation`.
+- Wraps dependency violations in `pgwf.ErrDependencyViolation`.
 
 ### Polling for work
 
@@ -186,7 +185,7 @@ func GetJobLeaseWithOptions(ctx context.Context, db pgwf.DB, tenantID pgwf.Tenan
 ```
 
 - `GetJobLease` is the direct, single-shot path for leasing one known job ID without going through the broader queue scan/backoff flow.
-- It still enforces normal lease rules: the job must be `READY`, match one of the supplied capabilities, and not be blocked by an active singleton peer.
+- It still enforces normal lease rules: the job must be `READY` and match one of the supplied capabilities.
 - `GetJobLeaseWithOptions` currently supports `LeaseSeconds` for custom lease durations.
 
 ### Lease helpers
@@ -272,7 +271,7 @@ func enqueueEmail(ctx context.Context, db *sql.DB, emailID string) error {
         WaitFor:  nil,
     }
     payload := map[string]any{"email_id": emailID}
-    if err := pgwf.SubmitJob(ctx, tx, pgwf.TenantID("default"), pgwf.JobID(emailID), deps, payload, nil, pgwf.WorkerID("api"), emailID, time.Time{}); err != nil {
+    if err := pgwf.SubmitJob(ctx, tx, pgwf.TenantID("default"), pgwf.JobID(emailID), deps, payload, nil, pgwf.WorkerID("api"), time.Time{}); err != nil {
         return err
     }
     return tx.Commit()

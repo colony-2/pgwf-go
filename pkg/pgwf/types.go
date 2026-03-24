@@ -382,7 +382,7 @@ func annotateError(err error) error {
 	}
 	msg := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(msg, "references unknown jobs"), strings.Contains(msg, "singleton"):
+	case strings.Contains(msg, "references unknown jobs"):
 		return wrap(ErrDependencyViolation, err)
 	case strings.Contains(msg, "not currently leased"), strings.Contains(msg, "actively leased"), strings.Contains(msg, "active lease not found"):
 		return wrap(ErrLeaseMismatch, err)
